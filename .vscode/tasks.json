@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Get Gmail Auth URL",
+      "type": "shell",
+      "command": "curl -s -X 'GET' 'http://localhost:8000/gmail/connect' -H 'accept: application/json' | jq -r '.auth_url'",
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      }
+    }
+  ]
+}

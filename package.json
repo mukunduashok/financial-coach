@@ -1,0 +1,23 @@
+{
+  "name": "financial-coach",
+  "version": "1.0.0",
+  "description": "AI-powered personal finance manager — local-first PWA",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx serve static -l 8111 --cors",
+    "lint": "npx @biomejs/biome check --fix static/js/",
+    "format": "npx @biomejs/biome format --write static/js/",
+    "test": "npx vitest run",
+    "test:watch": "npx vitest",
+    "test:e2e": "npx playwright test",
+    "deploy": "npx wrangler pages deploy static --project-name=fincoach"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@playwright/test": "^1.52.0",
+    "jsdom": "^29.1.1",
+    "sql.js": "^1.11.0",
+    "vitest": "^4.1.8"
+  }
+}

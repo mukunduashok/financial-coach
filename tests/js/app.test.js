@@ -1,0 +1,2588 @@
+/**
+ * Tests for formatAccountBalance behavior in static/js/app.js.
+ *
+ * formatAccountBalance is not exported from app.js, so we test it indirectly
+ * through the rendered HTML of the accounts screen. The app is booted via the
+ * 'db-ready' custom event and routes are accessed via the window-exposed Router
+ * object (window.Router is assigned at module level in app.js).
+ */
+import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+
+// Import the mocked DB so individual tests can adjust mock return values
+import { DB } from "../../static/js/db.js";
+
+
+// ---------------------------------------------------------------------------
+// DOM setup — must exist before app.js module is evaluated
+// ---------------------------------------------------------------------------
+document.body.innerHTML = '<div id="app"></div>';
+
+// jsdom does not implement these URL APIs — define stubs so vi.spyOn can wrap them later
+if (!URL.createObjectURL) URL.createObjectURL = () => "";
+if (!URL.revokeObjectURL) URL.revokeObjectURL = () => {};
+
+// jsdom does not implement matchMedia; provide a minimal stub required by Theme.init()
+Object.defineProperty(window, "matchMedia", {
+  writable: true,
+  value: vi.fn().mockImplementation((query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+});
+
+// ---------------------------------------------------------------------------
+// Mock all app.js dependencies before the module is loaded
+// ---------------------------------------------------------------------------
+vi.mock("../../static/js/db.js", () => ({
+  DB: {
+    init: vi.fn().mockResolvedValue(undefined),
+    getAccounts: vi.fn().mockResolvedValue([]),
+    getTransactions: vi.fn().mockResolvedValue([]),
+    getCategories: vi.fn().mockResolvedValue([]),
+    getGoals: vi.fn().mockResolvedValue([]),
+    getBudgets: vi.fn().mockResolvedValue([]),
+    getChatHistory: vi.fn().mockResolvedValue({ chat_id: null, history: [] }),
+    exportDatabase: vi.fn().mockReturnValue(new Uint8Array()),
+    exportTransactionsCSV: vi.fn().mockReturnValue(""),
+    getRecurringTransactions: vi.fn().mockResolvedValue([]),
+    getSettings: vi.fn().mockReturnValue({}),
+  },
+}));
+
+const mockAPI = {
+  getAccounts: vi.fn().mockResolvedValue([]),
+  getTransactions: vi.fn().mockResolvedValue([]),
+  getTransactionTotals: vi.fn().mockResolvedValue([]),
+  getCategories: vi.fn().mockResolvedValue([]),
+  getGoals: vi.fn().mockResolvedValue([]),
+  getBudgets: vi.fn().mockResolvedValue([]),
+  getChatHistory: vi.fn().mockResolvedValue({ chat_id: null, history: [] }),
+  exportTransactionsUrl: vi.fn().mockResolvedValue(null),
+  createTransaction: vi.fn().mockResolvedValue({}),
+  createAccount: vi.fn().mockResolvedValue({ id: 1, name: "Test Account" }),
+  getGmailStatus: vi.fn().mockResolvedValue({ connected: false, email: null }),
+  getGmailConnectUrl: vi.fn().mockResolvedValue({ auth_url: "https://accounts.google.com/o/oauth2/auth" }),
+  getUpcomingBills: vi.fn().mockResolvedValue([]),
+  getRecurringPatterns: vi.fn().mockResolvedValue([]),
+  updateRecurringPattern: vi.fn().mockResolvedValue({ detail: "Pattern updated" }),
+  getGmailCustomSenders: vi.fn().mockReturnValue([]),
+  saveGmailCustomSenders: vi.fn(),
+  getTags: vi.fn().mockResolvedValue([]),
+  createTag: vi.fn().mockResolvedValue({ id: 1, name: "testtag" }),
+  updateTag: vi.fn().mockResolvedValue({ id: 1, name: "updated" }),
+  deleteTag: vi.fn().mockResolvedValue(undefined),
+  setTransactionTags: vi.fn().mockResolvedValue(undefined),
+  getSpendingReport: vi.fn().mockResolvedValue({ total_transactions: 0, categories: [] }),
+};
+vi.mock("../../static/js/api.js", () => ({ API: mockAPI }));
+
+vi.mock("../../static/js/ai.js", () => ({
+  AI: {
+    getSettings: vi.fn().mockReturnValue({}),
+    saveSettings: vi.fn(),
+    testConnection: vi.fn().mockResolvedValue({ success: true }),
+  },
+  AI_PROVIDERS: {
+    groq: { name: "Groq", requiresKey: true, defaultModel: "llama-3.3-70b-versatile" },
+    openai: { name: "OpenAI", requiresKey: true, defaultModel: "gpt-4o-mini" },
+    ollama: { name: "Ollama (Local)", requiresKey: false, defaultModel: "llama3.1:8b" },
+    gemini: { name: "Google Gemini", requiresKey: true, defaultModel: "gemini-2.0-flash" },
+    azure: { name: "Azure OpenAI", requiresKey: true, defaultModel: "" },
+  },
+}));
+
+// jsdom does not implement these URL methods — define stubs before app.js is loaded
+URL.createObjectURL = vi.fn();
+URL.revokeObjectURL = vi.fn();
+
+// Load app.js — registers the 'db-ready' listener and assigns Router to window
+await import("../../static/js/app.js");
+
+// Import GDrive to allow spying on its methods in settings tests
+const { GDrive } = await import("../../static/js/gdrive.js");
+const { AI } = await import("../../static/js/ai.js");
+
+// Boot the app once: fires db-ready → renderLayout() → Router.init()
+beforeAll(async () => {
+  document.dispatchEvent(new Event("db-ready"));
+  // Wait for the async initial render (dashboard) to settle
+  await new Promise((r) => setTimeout(r, 100));
+});
+
+// Reset new mocks added for bill reminders so that vi.restoreAllMocks() calls
+// in some beforeEach/afterEach blocks don't leave them returning undefined.
+beforeEach(() => {
+  mockAPI.getUpcomingBills.mockResolvedValue([]);
+  mockAPI.getRecurringPatterns.mockResolvedValue([]);
+  mockAPI.updateRecurringPattern.mockResolvedValue({ detail: "Pattern updated" });
+});
+
+// ---------------------------------------------------------------------------
+// Helper: render the accounts screen with the given account data
+// ---------------------------------------------------------------------------
+async function renderAccountsWithData(accounts) {
+  mockAPI.getAccounts.mockResolvedValue(accounts);
+  const renderFn = window.Router.routes["#/accounts"];
+  await renderFn();
+  return document.getElementById("screen");
+}
+
+// ===========================================================================
+// formatAccountBalance — tested through rendered HTML of the accounts screen
+// ===========================================================================
+describe("formatAccountBalance", () => {
+  it("shows formatted currency for savings account with balance_updated_at set", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 25000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-15 10:00:00",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    // Should contain the balance amount (not empty, not "not synced")
+    expect(balanceEl.textContent.trim()).not.toBe("");
+    expect(balanceEl.querySelector(".balance-not-synced")).toBeNull();
+    expect(balanceEl.textContent).toContain("25,000");
+  });
+
+  it("shows 'Balance not yet synced' for savings account with null balance_updated_at", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 2,
+        name: "SBI Savings",
+        account_type: "savings",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    const notSyncedSpan = balanceEl.querySelector(".balance-not-synced");
+    expect(notSyncedSpan).not.toBeNull();
+    expect(notSyncedSpan.textContent).toBe("Balance not yet synced");
+  });
+
+  it("shows empty balance for debit account even when balance_updated_at is set", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 3,
+        name: "HDFC Debit Card",
+        account_type: "debit",
+        balance: 10000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-15 10:00:00",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    // formatAccountBalance returns "" for debit accounts
+    expect(balanceEl.innerHTML.trim()).toBe("");
+    expect(balanceEl.querySelector(".balance-not-synced")).toBeNull();
+  });
+
+  it("shows empty balance for credit account even when balance_updated_at is set", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 4,
+        name: "ICICI Credit Card",
+        account_type: "credit",
+        balance: 5000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-15 10:00:00",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    // Credit accounts now show billing cycle balance with "due this cycle" label
+    expect(balanceEl.innerHTML).toContain("due this cycle");
+    expect(balanceEl.querySelector(".balance-not-synced")).toBeNull();
+  });
+
+  it("shows formatted currency for current account with balance_updated_at set", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 5,
+        name: "ICICI Current",
+        account_type: "current",
+        balance: 50000,
+        effective_balance: null,
+        balance_updated_at: "2025-02-01 09:00:00",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    expect(balanceEl.textContent.trim()).not.toBe("");
+    expect(balanceEl.querySelector(".balance-not-synced")).toBeNull();
+    expect(balanceEl.textContent).toContain("50,000");
+  });
+
+  it("uses effective_balance over balance when both are present", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 6,
+        name: "AXIS Current Merged",
+        account_type: "current",
+        balance: 10000,
+        effective_balance: 35000,
+        balance_updated_at: "2025-02-01 09:00:00",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    // effective_balance (35000) takes precedence over balance (10000)
+    expect(balanceEl.textContent).toContain("35,000");
+    expect(balanceEl.textContent).not.toContain("10,000");
+  });
+
+  it("shows 'Balance not yet synced' for current account with undefined balance_updated_at", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 7,
+        name: "Kotak Current",
+        account_type: "current",
+        balance: 5000,
+        effective_balance: null,
+        balance_updated_at: undefined,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    const balanceEl = screen.querySelector(".account-balance-amount");
+    expect(balanceEl).not.toBeNull();
+    const notSyncedSpan = balanceEl.querySelector(".balance-not-synced");
+    expect(notSyncedSpan).not.toBeNull();
+    expect(notSyncedSpan.textContent).toBe("Balance not yet synced");
+  });
+});
+
+// ============================================================================
+// renderAccounts — inactive account filtering
+// ============================================================================
+describe("renderAccounts — inactive account filtering", () => {
+  it("shows inactive orphan account (no merged_into_id) as top-level card so user can manage it", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "Old Ghost Account",
+        account_type: "savings",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: false,
+      },
+    ]);
+    // Orphan accounts (inactive, no merged_into_id) must remain visible so users
+    // can see accounts left in a broken state after a failed merge.
+    const cards = screen.querySelectorAll(".acct-tile");
+    expect(cards.length).toBe(1);
+    expect(screen.innerHTML).toContain("Old Ghost Account");
+  });
+
+  it("renders active target account with its merged child correctly", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 25000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-15 10:00:00",
+        merged_accounts: [{ id: 2, name: "HDFC Old" }],
+        merged_into_id: null,
+        is_active: true,
+      },
+      {
+        id: 2,
+        name: "HDFC Old",
+        account_type: "savings",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: 1,
+        is_active: false,
+      },
+    ]);
+    // Only the active parent should render as a top-level tile
+    const cards = screen.querySelectorAll(".acct-tile");
+    expect(cards.length).toBeGreaterThanOrEqual(1);
+    const html = screen.innerHTML;
+    expect(html).toContain("HDFC Savings");
+  });
+});
+
+// ============================================================================
+// renderAccounts — grouped tile layout
+// ============================================================================
+describe("renderAccounts — ACCOUNT_GROUPS grouping", () => {
+  it("savings account lands in Savings Accounts section with bank tile", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 10000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-01",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Savings Accounts");
+    expect(screen.querySelector(".acct-tile--bank")).not.toBeNull();
+    expect(screen.querySelector(".account-balance-amount")).not.toBeNull();
+    expect(screen.querySelector(".account-info")).not.toBeNull();
+    expect(screen.querySelector("button[title='Delete']")).not.toBeNull();
+  });
+
+  it("current account lands in Current Accounts section with bank tile", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 2,
+        name: "ICICI Current",
+        account_type: "current",
+        balance: 50000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-01",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Current Accounts");
+    expect(screen.querySelector(".acct-tile--bank")).not.toBeNull();
+  });
+
+  it("credit account lands in Credit Cards section with credit tile", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 3,
+        name: "HDFC Credit",
+        account_type: "credit",
+        balance: 0,
+        credit_cycle_balance: 2500,
+        effective_balance: null,
+        balance_updated_at: "2025-01-01",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Credit Cards");
+    expect(screen.querySelector(".acct-tile--credit")).not.toBeNull();
+    expect(screen.querySelector(".account-balance-amount").innerHTML).toContain("due this cycle");
+    expect(screen.querySelector(".account-info")).not.toBeNull();
+    expect(screen.querySelector("button[title='Delete']")).not.toBeNull();
+  });
+
+  it("credit_card account type also lands in Credit Cards section", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 4,
+        name: "Axis Credit Card",
+        account_type: "credit_card",
+        balance: 0,
+        credit_cycle_balance: 1000,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Credit Cards");
+    expect(screen.querySelector(".acct-tile--credit")).not.toBeNull();
+  });
+
+  it("debit account lands in Prepaid / Debit Cards section with debit tile", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 5,
+        name: "SBI Debit",
+        account_type: "debit",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Prepaid / Debit Cards");
+    expect(screen.querySelector(".acct-tile--debit")).not.toBeNull();
+    expect(screen.querySelector(".account-balance-amount")).not.toBeNull();
+    expect(screen.querySelector(".account-info")).not.toBeNull();
+    expect(screen.querySelector("button[title='Delete']")).not.toBeNull();
+  });
+
+  it("prepaid account type also lands in Prepaid / Debit Cards section", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 6,
+        name: "Paytm Prepaid",
+        account_type: "prepaid",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Prepaid / Debit Cards");
+    expect(screen.querySelector(".acct-tile--debit")).not.toBeNull();
+  });
+
+  it("wallet account lands in Others section with wallet tile", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 7,
+        name: "PhonePe Wallet",
+        account_type: "wallet",
+        balance: 500,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Others");
+    expect(screen.querySelector(".acct-tile--wallet")).not.toBeNull();
+    expect(screen.querySelector(".account-balance-amount")).not.toBeNull();
+    expect(screen.querySelector(".account-info")).not.toBeNull();
+    expect(screen.querySelector("button[title='Delete']")).not.toBeNull();
+  });
+
+  it("unrecognised account type falls into Others section", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 8,
+        name: "Exotic Account",
+        account_type: "crypto",
+        balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Others");
+    expect(screen.querySelector(".acct-tile--wallet")).not.toBeNull();
+  });
+
+  it("empty sections are not rendered", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 10000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-01",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    // Only Savings Accounts section should be present
+    expect(screen.innerHTML).toContain("Savings Accounts");
+    expect(screen.innerHTML).not.toContain("Credit Cards");
+    expect(screen.innerHTML).not.toContain("Prepaid / Debit Cards");
+    expect(screen.innerHTML).not.toContain("Others");
+  });
+
+  it("multiple account types render in separate sections", async () => {
+    const screen = await renderAccountsWithData([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 10000,
+        effective_balance: null,
+        balance_updated_at: "2025-01-01",
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+      {
+        id: 2,
+        name: "HDFC Credit Card",
+        account_type: "credit",
+        balance: 0,
+        credit_cycle_balance: 0,
+        effective_balance: null,
+        balance_updated_at: null,
+        merged_accounts: [],
+        merged_into_id: null,
+        is_active: true,
+      },
+    ]);
+    expect(screen.innerHTML).toContain("Savings Accounts");
+    expect(screen.innerHTML).toContain("Credit Cards");
+    expect(screen.querySelectorAll(".acct-section").length).toBe(2);
+    expect(screen.querySelectorAll(".acct-tile").length).toBe(2);
+  });
+});
+
+
+// ============================================================================
+// Bug Regression Tests — App Layer
+// These tests currently FAIL because the production bugs have not been fixed.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// BUG-SEV1-02 & BUG-SEV1-03: export functions must await async DB calls
+// ---------------------------------------------------------------------------
+describe("BUG-SEV1-02 / BUG-SEV1-03: export functions await DB async calls", () => {
+	let capturedBlobParts;
+	let blobSpy;
+
+	let anchorClickSpy;
+
+	beforeEach(async () => {
+		capturedBlobParts = null;
+
+		// Make DB exports truly async (return Promise) — exposes missing-await bug
+		DB.exportDatabase.mockResolvedValue(new Uint8Array([83, 81, 76, 105])); // "SQLi"
+		DB.exportTransactionsCSV.mockResolvedValue("id,amount,description\n1,-100,Test");
+
+		// Spy on Blob constructor to capture the content passed to it
+		const OrigBlob = globalThis.Blob;
+		blobSpy = vi.spyOn(globalThis, "Blob").mockImplementation(function (parts, opts) {
+			capturedBlobParts = parts ? [...parts] : [];
+			return new OrigBlob(parts || [], opts);
+		});
+
+		// Reset URL stubs for this test (defined at module level)
+		URL.createObjectURL.mockReturnValue("blob:test-export");
+		URL.revokeObjectURL.mockReturnValue(undefined);
+
+		// Prevent jsdom "Not implemented: navigation" error when anchor.click() fires
+		anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+		// Render settings screen so the export buttons are in the DOM
+		const renderFn = window.Router.routes["#/settings"];
+		await renderFn();
+	});
+
+	afterEach(() => {
+		// Restore only the Blob spy — avoid vi.restoreAllMocks() because it also
+		// resets vi.fn() module mocks (e.g. AI.getSettings) to return undefined.
+		blobSpy?.mockRestore();
+		anchorClickSpy?.mockRestore();
+		URL.createObjectURL.mockReset();
+		URL.revokeObjectURL.mockReset();
+		capturedBlobParts = null;
+	});
+
+	it("BUG-SEV1-02: exportBackup creates Blob with actual bytes, not a Promise object", async () => {
+		const btn = document.querySelector('[data-action="export-backup"]');
+		expect(btn).not.toBeNull();
+
+		btn.click();
+		// Allow any micro-tasks (Promise resolutions) to complete
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(capturedBlobParts).not.toBeNull();
+		expect(capturedBlobParts).toHaveLength(1);
+		// BUG: without await, capturedBlobParts[0] is a Promise (not Uint8Array)
+		// After fix: capturedBlobParts[0] should be a Uint8Array with real bytes
+		expect(capturedBlobParts[0]).toBeInstanceOf(Uint8Array);
+		expect(capturedBlobParts[0]).not.toBeInstanceOf(Promise);
+	});
+
+	it("BUG-SEV1-03: exportCSV creates Blob with actual CSV string, not a Promise object", async () => {
+		const btn = document.querySelector('[data-action="export-csv"]');
+		expect(btn).not.toBeNull();
+
+		btn.click();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(capturedBlobParts).not.toBeNull();
+		expect(capturedBlobParts).toHaveLength(1);
+		// BUG: without await, capturedBlobParts[0] is a Promise (not a string)
+		// After fix: capturedBlobParts[0] should be a CSV string
+		expect(typeof capturedBlobParts[0]).toBe("string");
+		expect(capturedBlobParts[0]).toContain("id,amount");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// BUG-SEV2-02: date helpers must return local date, not UTC date
+// Simulates being in IST (UTC+5:30) by mocking Date.prototype.toISOString to
+// return the UTC equivalent of midnight local time — the scenario where UTC
+// date and local date differ.
+// ---------------------------------------------------------------------------
+describe("BUG-SEV2-02: date helpers return local date not UTC date", () => {
+	let toISOSpy;
+
+	beforeEach(async () => {
+		// Simulate IST timezone: toISOString() subtracts 5h30m from the stored
+		// timestamp so that "midnight local" appears as "18:30 previous day UTC".
+		// The buggy implementation calls toISOString() and gets the wrong date;
+		// the correct implementation uses getFullYear/getMonth/getDate and is unaffected.
+		toISOSpy = vi.spyOn(Date.prototype, "toISOString").mockImplementation(function () {
+			const offsetMs = 5.5 * 60 * 60 * 1000; // IST = UTC+5:30
+			const utcMs = this.getTime() - offsetMs;
+			const d = new Date(utcMs);
+			const pad = (n) => String(n).padStart(2, "0");
+			return (
+				`${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
+				`T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.000Z`
+			);
+		});
+
+		mockAPI.getBudgets.mockResolvedValue([]);
+		mockAPI.getCategories.mockResolvedValue([
+			{ id: 1, name: "Food & Dining", is_default: false, description: null },
+		]);
+
+		const renderFn = window.Router.routes["#/budgets"];
+		await renderFn();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		// Remove any modal that was opened during the test
+		for (const el of document.querySelectorAll(".modal-overlay")) el.remove();
+	});
+
+	it("budget period start defaults to local first-of-month, not UTC first-of-month", async () => {
+		const fabBtn = document.querySelector('[data-action="show-create-budget"]');
+		expect(fabBtn).not.toBeNull();
+		fabBtn.click();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const startInput = document.querySelector("#budget-start");
+		expect(startInput).not.toBeNull();
+
+		// Build the correct local first-of-month using local Date methods
+		const now = new Date();
+		const expectedLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+		// BUG: firstOfMonthISO uses toISOString (mocked → off by one day)
+		// After fix: uses getFullYear/getMonth → returns expectedLocal
+		expect(startInput.value).toBe(expectedLocal);
+	});
+
+	it("budget period end defaults to local last-of-month, not UTC last-of-month", async () => {
+		const fabBtn = document.querySelector('[data-action="show-create-budget"]');
+		expect(fabBtn).not.toBeNull();
+		fabBtn.click();
+		await new Promise((r) => setTimeout(r, 50));
+
+		const endInput = document.querySelector("#budget-end");
+		expect(endInput).not.toBeNull();
+
+		// Build the correct local last-of-month using local Date methods
+		const now = new Date();
+		const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+		const expectedLocal =
+			`${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, "0")}` +
+			`-${String(lastDay.getDate()).padStart(2, "0")}`;
+
+		// BUG: lastDayOfMonthISO uses toISOString (mocked → off by one day)
+		// After fix: uses getFullYear/getMonth/getDate → returns expectedLocal
+		expect(endInput.value).toBe(expectedLocal);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// BUG-SEV3-06: dashboard total balance must subtract credit account balances
+// ---------------------------------------------------------------------------
+describe("BUG-SEV3-06: dashboard total balance subtracts credit account balances", () => {
+	beforeEach(() => {
+		mockAPI.getTransactions.mockResolvedValue([]);
+	});
+
+	it("subtracts credit account balance from net worth (savings 10k − credit 5k = 5k)", async () => {
+		mockAPI.getAccounts.mockResolvedValue([
+			{
+				id: 1,
+				name: "HDFC Savings",
+				account_type: "savings",
+				balance: 10000,
+				effective_balance: 10000,
+				balance_updated_at: "2026-01-01",
+				is_active: true,
+				merged_accounts: [],
+				merged_into_id: null,
+			},
+			{
+				id: 2,
+				name: "Credit Card",
+				account_type: "credit",
+				balance: 5000,
+				effective_balance: 5000,
+				balance_updated_at: "2026-01-01",
+				is_active: true,
+				merged_accounts: [],
+				merged_into_id: null,
+			},
+		]);
+
+		const renderFn = window.Router.routes["#/"];
+		await renderFn();
+
+		const balanceEl = document.querySelector(".balance-amount");
+		expect(balanceEl).not.toBeNull();
+		// BUG: currently adds both → ₹15,000
+		// After fix: savings 10k − credit 5k → ₹5,000
+		expect(balanceEl.textContent).toContain("5,000");
+		expect(balanceEl.textContent).not.toContain("15,000");
+	});
+
+	it("shows correct total when there are only savings accounts (no credit)", async () => {
+		mockAPI.getAccounts.mockResolvedValue([
+			{
+				id: 3,
+				name: "SBI Savings",
+				account_type: "savings",
+				balance: 20000,
+				effective_balance: 20000,
+				balance_updated_at: "2026-01-01",
+				is_active: true,
+				merged_accounts: [],
+				merged_into_id: null,
+			},
+		]);
+
+		const renderFn = window.Router.routes["#/"];
+		await renderFn();
+
+		const balanceEl = document.querySelector(".balance-amount");
+		expect(balanceEl).not.toBeNull();
+		expect(balanceEl.textContent).toContain("20,000");
+	});
+});
+
+// ===========================================================================
+// exportPDF — unit tests
+// ===========================================================================
+
+const TX_FIXTURE = [
+	{
+		id: 1,
+		date: "2026-05-01",
+		description: "Test Transaction",
+		merchant_name: "Test Shop",
+		category: { name: "Food" },
+		category_name: "Food",
+		account_name: "HDFC",
+		amount: -250,
+		transaction_type: "expense",
+	},
+];
+
+const TOTALS_FIXTURE = {
+	total_income: 5000,
+	total_expense: 250,
+	net: 4750,
+	transaction_count: 1,
+};
+
+async function flushPromises() {
+	await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("exportPDF", () => {
+	beforeEach(async () => {
+		// Setup print spy
+		window.print = vi.fn();
+
+		// Setup API mocks with fixture data
+		mockAPI.getTransactions.mockResolvedValue(TX_FIXTURE);
+		mockAPI.getTransactionTotals.mockResolvedValue(TOTALS_FIXTURE);
+		mockAPI.getAccounts.mockResolvedValue([]);
+		mockAPI.getCategories.mockResolvedValue([]);
+
+		// Remove any leftover print frame
+		document.getElementById("print-frame")?.remove();
+
+		// Navigate to transactions screen (export is now triggered from Settings)
+		const renderFn = window.Router.routes["#/transactions"];
+		await renderFn();
+	});
+
+	afterEach(() => {
+		document.getElementById("print-frame")?.remove();
+		vi.restoreAllMocks();
+	});
+
+	it("No PDF button in export-toolbar on transactions page (moved to Settings)", () => {
+		// The export toolbar was removed from the transactions page
+		const btn = document.querySelector(
+			'[data-action="export-transactions"][data-format="pdf"]',
+		);
+		expect(btn).toBeNull();
+	});
+
+	it("exportPDF appends #print-frame to document.body when called directly", async () => {
+		// exportPDF is called from Settings; invoke it directly via window
+		await window.exportPDF();
+		await vi.waitFor(() => expect(document.getElementById("print-frame")).not.toBeNull());
+		expect(document.getElementById("print-frame")).not.toBeNull();
+	});
+
+	it("exportPDF calls window.print()", async () => {
+		await window.exportPDF();
+		await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
+	});
+
+	it("print-frame contains transaction table headers", async () => {
+		await window.exportPDF();
+		await vi.waitFor(() => expect(document.getElementById("print-frame")).not.toBeNull());
+		const frame = document.getElementById("print-frame");
+		expect(frame.innerHTML).toContain("Date");
+		expect(frame.innerHTML).toContain("Description");
+	});
+
+	it("print-frame contains transaction data", async () => {
+		await window.exportPDF();
+		await vi.waitFor(() => expect(document.getElementById("print-frame")).not.toBeNull());
+		const frame = document.getElementById("print-frame");
+		expect(frame.innerHTML).toContain("Test Transaction");
+	});
+
+	it("print-frame contains totals footer", async () => {
+		await window.exportPDF();
+		await vi.waitFor(() => expect(document.getElementById("print-frame")).not.toBeNull());
+		const frame = document.getElementById("print-frame");
+		// Footer should show income and expense amounts
+		expect(frame.innerHTML).toContain("Total Income");
+		expect(frame.innerHTML).toContain("Total Expenses");
+		// formatCurrency renders these amounts
+		expect(frame.innerHTML).toContain("5,000");
+	});
+});
+
+// ===========================================================================
+// BUG-UI-01 — info-notice icon tooltips in settings screen
+// ===========================================================================
+describe("BUG-UI-01: settings screen uses info-notice icons instead of inline blocks", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(async () => {
+    AI.getSettings.mockReturnValue({});
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders at least one .info-notice element in the settings screen", async () => {
+    const screen = await renderSettings();
+    const icons = screen.querySelectorAll(".info-notice");
+    expect(icons.length).toBeGreaterThan(0);
+  });
+
+  it("each .info-notice contains a .info-notice-tooltip child", async () => {
+    const screen = await renderSettings();
+    const icons = screen.querySelectorAll(".info-notice");
+    for (const icon of icons) {
+      const tooltip = icon.querySelector(".info-notice-tooltip");
+      expect(tooltip).not.toBeNull();
+      expect(tooltip.textContent.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("privacy notice icon is keyboard accessible (tabindex='0')", async () => {
+    const screen = await renderSettings();
+    const icons = screen.querySelectorAll(".info-notice");
+    const accessible = [...icons].some((el) => el.getAttribute("tabindex") === "0");
+    expect(accessible).toBe(true);
+  });
+
+  it("does not render any inline bordered privacy notice paragraph", async () => {
+    const screen = await renderSettings();
+    const inlineParagraphs = [...screen.querySelectorAll("p")].filter((p) =>
+      p.style.borderLeft?.includes("solid"),
+    );
+    expect(inlineParagraphs).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// BUG-GDRIVE-01 — delete backup UI and double-confirmation flow
+// ===========================================================================
+describe("BUG-GDRIVE-01: Google Drive delete backup with double confirmation", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(async () => {
+    AI.getSettings.mockReturnValue({});
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: "user@example.com" });
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(true);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+    vi.spyOn(GDrive, "getLastModified").mockResolvedValue("2025-01-01T00:00:00.000Z");
+    vi.spyOn(GDrive, "deleteBackup").mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the delete backup button when connected and Drive sync is enabled", async () => {
+    const screen = await renderSettings();
+    const btn = screen.querySelector('[data-action="gdrive-delete-backup"]');
+    expect(btn).not.toBeNull();
+  });
+
+  it("delete backup button has danger styling", async () => {
+    const screen = await renderSettings();
+    const btn = screen.querySelector('[data-action="gdrive-delete-backup"]');
+    expect(btn.classList.contains("btn-danger")).toBe(true);
+  });
+
+  it("does not call deleteBackup when first confirm is cancelled", async () => {
+    await renderSettings();
+    vi.spyOn(window, "confirm").mockReturnValueOnce(false);
+
+    const btn = document.querySelector('[data-action="gdrive-delete-backup"]');
+    btn.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(GDrive.deleteBackup).not.toHaveBeenCalled();
+  });
+
+  it("does not call deleteBackup when second confirm is cancelled", async () => {
+    await renderSettings();
+    vi.spyOn(window, "confirm")
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    const btn = document.querySelector('[data-action="gdrive-delete-backup"]');
+    btn.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(GDrive.deleteBackup).not.toHaveBeenCalled();
+  });
+
+  it("calls deleteBackup when both confirms are accepted", async () => {
+    await renderSettings();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const btn = document.querySelector('[data-action="gdrive-delete-backup"]');
+    btn.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(GDrive.deleteBackup).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows two confirm dialogs when delete is triggered", async () => {
+    await renderSettings();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const btn = document.querySelector('[data-action="gdrive-delete-backup"]');
+    btn.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ===========================================================================
+// BUG-TX-01 — txItemHTML display label priority (dashboard recent transactions)
+// txItemHTML is internal; tested via the dashboard "Recent Transactions" list.
+// ===========================================================================
+describe("BUG-TX-01: txItemHTML label priority (merchant_name > merchant_upi_id > description > 'Transaction')", () => {
+  const BASE_TX = {
+    id: 10,
+    date: "2026-05-15",
+    transaction_type: "expense",
+    amount: 100,
+    account_name: "HDFC",
+    category: null,
+  };
+
+  async function renderDashboardWithTransaction(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+  });
+
+  it("shows merchant_name when merchant_name is set (highest priority)", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: "Swiggy",
+      merchant_upi_id: "swiggy@upi",
+      description: "Food order",
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).toContain("Swiggy");
+  });
+
+  it("does not show description or upi_id when merchant_name is set", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: "Swiggy",
+      merchant_upi_id: "swiggy@upi",
+      description: "Food order",
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).not.toContain("Food order");
+    expect(desc.textContent.trim()).not.toContain("swiggy@upi");
+  });
+
+  it("shows merchant_upi_id when merchant_name is null", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: "zomato@upi",
+      description: "Food delivery",
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).toContain("zomato@upi");
+  });
+
+  it("does not show description when merchant_upi_id is present and merchant_name is null", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: "zomato@upi",
+      description: "Food delivery",
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).not.toContain("Food delivery");
+  });
+
+  it("shows description when both merchant_name and merchant_upi_id are null", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: "ATM Withdrawal",
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).toContain("ATM Withdrawal");
+  });
+
+  it("shows 'Transaction' fallback when all three label fields are null", async () => {
+    const screen = await renderDashboardWithTransaction({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: null,
+    });
+    const desc = screen.querySelector(".tx-desc");
+    expect(desc).not.toBeNull();
+    expect(desc.textContent.trim()).toContain("Transaction");
+  });
+});
+
+// ===========================================================================
+// BUG-TX-01 — same priority logic in loadTransactionList (transactions screen)
+// ===========================================================================
+describe("BUG-TX-01: transactions list screen respects display label priority", () => {
+  const BASE_TX = {
+    id: 20,
+    date: "2026-05-15",
+    transaction_type: "expense",
+    amount: 150,
+    account_name: "SBI",
+    category: null,
+  };
+
+  async function renderTransactionsWithData(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 150,
+      net: -150,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    // Flush any remaining microtasks (e.g. getTransactionTotals .then)
+    await new Promise((r) => setTimeout(r, 0));
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+  });
+
+  it("shows merchant_name in list row when merchant_name is set", async () => {
+    const screen = await renderTransactionsWithData({
+      ...BASE_TX,
+      merchant_name: "BigBasket",
+      merchant_upi_id: null,
+      description: "Grocery",
+    });
+    const descs = [...screen.querySelectorAll(".tx-desc")];
+    expect(descs.length).toBeGreaterThan(0);
+    expect(descs.some((el) => el.textContent.includes("BigBasket"))).toBe(true);
+  });
+
+  it("shows merchant_upi_id in list row when merchant_name is null", async () => {
+    const screen = await renderTransactionsWithData({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: "paytm@upi",
+      description: "Recharge",
+    });
+    const descs = [...screen.querySelectorAll(".tx-desc")];
+    expect(descs.length).toBeGreaterThan(0);
+    expect(descs.some((el) => el.textContent.includes("paytm@upi"))).toBe(true);
+  });
+
+  it("shows description in list row when both merchant fields are null", async () => {
+    const screen = await renderTransactionsWithData({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: "Bank Transfer",
+    });
+    const descs = [...screen.querySelectorAll(".tx-desc")];
+    expect(descs.length).toBeGreaterThan(0);
+    expect(descs.some((el) => el.textContent.includes("Bank Transfer"))).toBe(true);
+  });
+
+  it("shows 'Transaction' fallback in list row when all label fields are null", async () => {
+    const screen = await renderTransactionsWithData({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: null,
+    });
+    const descs = [...screen.querySelectorAll(".tx-desc")];
+    expect(descs.length).toBeGreaterThan(0);
+    expect(descs.some((el) => el.textContent.includes("Transaction"))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// REVIEW-TX-01 — "Detect Recurring" button removed from transactions screen
+// ===========================================================================
+describe("REVIEW-TX-01: 'Detect Recurring' UI elements removed from transactions screen", () => {
+  beforeEach(async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 0,
+      net: 0,
+      transaction_count: 0,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+  });
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+  });
+
+  it("no #btn-detect-recurring button is present after rendering transactions screen", () => {
+    const btn = document.querySelector("#btn-detect-recurring");
+    expect(btn).toBeNull();
+  });
+
+  it("no [data-action='run-detect-recurring'] element is present", () => {
+    const el = document.querySelector("[data-action='run-detect-recurring']");
+    expect(el).toBeNull();
+  });
+
+  it("runDetectRecurring is not exposed on window", () => {
+    expect(window.runDetectRecurring).toBeUndefined();
+  });
+
+  it("no element with text '🔄 Detect Recurring' exists in transactions screen", () => {
+    const buttons = [...document.querySelectorAll("button")];
+    const found = buttons.some((btn) => btn.textContent.includes("Detect Recurring"));
+    expect(found).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Privacy & Security — toggle-trusted-device handler
+// ===========================================================================
+describe("Privacy & Security: toggle-trusted-device handler", () => {
+  async function renderSettingsScreen() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(async () => {
+    localStorage.clear();
+    AI.getSettings.mockReturnValue({});
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+    // Clear any toasts from previous tests
+    const container = document.querySelector(".toast-container");
+    if (container) container.innerHTML = "";
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("settings screen renders Privacy & Security heading", async () => {
+    const screen = await renderSettingsScreen();
+    const headings = [...screen.querySelectorAll("h2")];
+    expect(headings.some((h) => h.textContent.includes("Privacy"))).toBe(true);
+  });
+
+  it("trusted device checkbox renders unchecked when key not set", async () => {
+    const screen = await renderSettingsScreen();
+    const checkbox = screen.querySelector('[data-action="toggle-trusted-device"]');
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("trusted device checkbox renders checked when TRUSTED_DEVICE_KEY is set", async () => {
+    localStorage.setItem("fincoach-trusted-device", "true");
+    const screen = await renderSettingsScreen();
+    const checkbox = screen.querySelector('[data-action="toggle-trusted-device"]');
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it("checking the checkbox sets TRUSTED_DEVICE_KEY and removes activity key", async () => {
+    localStorage.setItem("fincoach-session-last-activity", String(Date.now()));
+    await renderSettingsScreen();
+    const checkbox = document.querySelector('[data-action="toggle-trusted-device"]');
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.click(); // toggles to checked, click handler fires with el.checked === true
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(localStorage.getItem("fincoach-trusted-device")).toBe("true");
+    expect(localStorage.getItem("fincoach-session-last-activity")).toBeNull();
+  });
+
+  it("checking the checkbox shows success toast", async () => {
+    await renderSettingsScreen();
+    const checkbox = document.querySelector('[data-action="toggle-trusted-device"]');
+    checkbox.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const toast = document.querySelector(".toast.success");
+    expect(toast).not.toBeNull();
+    expect(toast.textContent).toContain("Trusted device enabled");
+  });
+
+  it("unchecking the checkbox removes TRUSTED_DEVICE_KEY and sets activity key", async () => {
+    localStorage.setItem("fincoach-trusted-device", "true");
+    await renderSettingsScreen();
+    const checkbox = document.querySelector('[data-action="toggle-trusted-device"]');
+    expect(checkbox.checked).toBe(true);
+
+    checkbox.click(); // toggles to unchecked, click handler fires with el.checked === false
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(localStorage.getItem("fincoach-trusted-device")).toBeNull();
+    expect(localStorage.getItem("fincoach-session-last-activity")).not.toBeNull();
+  });
+
+  it("unchecking the checkbox shows info toast", async () => {
+    localStorage.setItem("fincoach-trusted-device", "true");
+    await renderSettingsScreen();
+    const checkbox = document.querySelector('[data-action="toggle-trusted-device"]');
+    checkbox.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const toast = document.querySelector(".toast.info");
+    expect(toast).not.toBeNull();
+    expect(toast.textContent).toContain("Trusted device disabled");
+  });
+
+  it("settings status text shows inactivity warning when trusted device disabled", async () => {
+    const screen = await renderSettingsScreen();
+    expect(screen.textContent).toContain("6 hours");
+  });
+
+  it("settings status text shows persistence message when trusted device enabled", async () => {
+    localStorage.setItem("fincoach-trusted-device", "true");
+    const screen = await renderSettingsScreen();
+    expect(screen.textContent).toContain("indefinitely");
+  });
+});
+
+// ===========================================================================
+// Onboarding Wizard
+// ===========================================================================
+describe("onboarding wizard", () => {
+  afterEach(() => {
+    // Remove any wizard from the DOM
+    document.getElementById("onboarding-wizard")?.remove();
+    // Clean onboarding keys from localStorage
+    localStorage.removeItem("fincoach-onboarded");
+    localStorage.removeItem("fincoach-onboarding-step");
+    // Reset mocks to defaults
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    AI.getSettings.mockReturnValue({});
+    vi.restoreAllMocks();
+  });
+
+  it("checkOnboarding shows wizard when not onboarded", () => {
+    localStorage.removeItem("fincoach-onboarded");
+    window.checkOnboarding();
+    expect(document.getElementById("onboarding-wizard")).not.toBeNull();
+  });
+
+  it("checkOnboarding does not show wizard when already onboarded", () => {
+    localStorage.setItem("fincoach-onboarded", "true");
+    window.checkOnboarding();
+    expect(document.getElementById("onboarding-wizard")).toBeNull();
+  });
+
+  it("checkOnboarding resumes from saved step", () => {
+    localStorage.removeItem("fincoach-onboarded");
+    localStorage.setItem("fincoach-onboarding-step", "3");
+    window.checkOnboarding();
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent).toContain("Auto-import");
+  });
+
+  it("completeOnboarding removes wizard and sets key", () => {
+    const wizard = document.createElement("div");
+    wizard.id = "onboarding-wizard";
+    document.body.appendChild(wizard);
+    window.completeOnboarding();
+    expect(document.getElementById("onboarding-wizard")).toBeNull();
+    expect(localStorage.getItem("fincoach-onboarded")).toBe("true");
+  });
+
+  it("onboardingAdvance saves step to localStorage", () => {
+    window.onboardingAdvance(2);
+    expect(localStorage.getItem("fincoach-onboarding-step")).toBe("2");
+    document.getElementById("onboarding-wizard")?.remove();
+  });
+
+  it("step 1 renders welcome headline", () => {
+    window.renderOnboardingStep(1);
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent).toContain("Welcome to Financial Coach");
+  });
+
+  it("step 2 renders transaction explanation", () => {
+    window.renderOnboardingStep(2);
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent).toContain("How transactions are tracked");
+  });
+
+  it("step 3 renders Gmail connect content", () => {
+    window.renderOnboardingStep(3);
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent).toContain("Auto-import");
+  });
+
+  it("step 4 renders AI coaching content", () => {
+    window.renderOnboardingStep(4);
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent.toLowerCase()).toContain("financial coach");
+  });
+
+  it("step 5 renders summary with dashboard CTA", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockResolvedValue(null);
+    AI.getSettings.mockReturnValue({});
+    await window.renderOnboardingStep(5);
+    const headline = document.querySelector(".onboarding-headline");
+    expect(headline).not.toBeNull();
+    expect(headline.textContent.toLowerCase()).toContain("all set");
+  });
+
+  // -------------------------------------------------------------------------
+  // Bug fix: step 5 checks gmailStatus.connected (not gmailStatus.email)
+  // -------------------------------------------------------------------------
+  it("step 5 shows Gmail connected with email when connected=true and email is set", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: "user@gmail.com" });
+    AI.getSettings.mockReturnValue({});
+    await window.renderOnboardingStep(5);
+    const list = document.querySelector(".onboarding-summary-list");
+    expect(list).not.toBeNull();
+    expect(list.textContent).toContain("Gmail connected");
+    expect(list.textContent).toContain("user@gmail.com");
+  });
+
+  it("step 5 shows Gmail connected without email when connected=true but email is null", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: null });
+    AI.getSettings.mockReturnValue({});
+    await window.renderOnboardingStep(5);
+    const list = document.querySelector(".onboarding-summary-list");
+    expect(list).not.toBeNull();
+    expect(list.textContent).toContain("Gmail connected");
+    // Should NOT contain any email address-like string
+    expect(list.textContent).not.toContain("@");
+  });
+
+  it("step 5 shows Gmail not connected fallback when connected=false", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    AI.getSettings.mockReturnValue({});
+    await window.renderOnboardingStep(5);
+    const list = document.querySelector(".onboarding-summary-list");
+    expect(list).not.toBeNull();
+    expect(list.textContent).toContain("Gmail not connected");
+  });
+
+  it("step 5 shows Gmail not connected fallback when getGmailStatus rejects", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getGmailStatus.mockRejectedValue(new Error("network error"));
+    AI.getSettings.mockReturnValue({});
+    await window.renderOnboardingStep(5);
+    const list = document.querySelector(".onboarding-summary-list");
+    expect(list).not.toBeNull();
+    expect(list.textContent).toContain("Gmail not connected");
+  });
+});
+
+// ===========================================================================
+// categoryIcon() — unit tests
+// ===========================================================================
+describe("categoryIcon", () => {
+  it("Food & Dining returns 🍽️ span", () => {
+    const html = window.categoryIcon("Food & Dining");
+    expect(html).toContain("🍽️");
+    expect(html).not.toContain("tx-icon-letter");
+  });
+
+  it("Groceries returns 🛒 span", () => {
+    const html = window.categoryIcon("Groceries");
+    expect(html).toContain("🛒");
+    expect(html).not.toContain("tx-icon-letter");
+  });
+
+  it("Income returns 💰 span", () => {
+    const html = window.categoryIcon("Income");
+    expect(html).toContain("💰");
+    expect(html).not.toContain("tx-icon-letter");
+  });
+
+  it("Other returns 📌 span", () => {
+    const html = window.categoryIcon("Other");
+    expect(html).toContain("📌");
+    expect(html).not.toContain("tx-icon-letter");
+  });
+
+  it("Investment returns 📈 span", () => {
+    const html = window.categoryIcon("Investment");
+    expect(html).toContain("📈");
+    expect(html).not.toContain("tx-icon-letter");
+  });
+
+  it("unknown category returns tx-icon-letter span with uppercased first letter", () => {
+    const html = window.categoryIcon("Rent");
+    expect(html).toContain("tx-icon-letter");
+    expect(html).toContain("R");
+  });
+
+  it("unknown category uses first letter uppercased", () => {
+    const html = window.categoryIcon("zakat");
+    expect(html).toContain("tx-icon-letter");
+    expect(html).toContain("Z");
+  });
+
+  it("empty string returns tx-icon-letter with ?", () => {
+    const html = window.categoryIcon("");
+    expect(html).toContain("tx-icon-letter");
+    expect(html).toContain("?");
+  });
+
+  it("null returns tx-icon-letter with ?", () => {
+    const html = window.categoryIcon(null);
+    expect(html).toContain("tx-icon-letter");
+    expect(html).toContain("?");
+  });
+
+  it("undefined returns tx-icon-letter with ?", () => {
+    const html = window.categoryIcon(undefined);
+    expect(html).toContain("tx-icon-letter");
+    expect(html).toContain("?");
+  });
+});
+
+// ===========================================================================
+// txItemHTML meta format — tested via dashboard recent transactions
+// ===========================================================================
+describe("txItemHTML meta format", () => {
+  const BASE_TX = {
+    id: 50,
+    date: "2026-05-01",
+    transaction_type: "expense",
+    amount: -300,
+    account_name: "HDFC Savings",
+    merchant_name: "Swiggy",
+    merchant_upi_id: null,
+    description: "Food order",
+    category: { name: "Food & Dining" },
+  };
+
+  async function renderDashboardWithTx(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+  });
+
+  it("meta line shows date only (no account name, no separator)", async () => {
+    const screen = await renderDashboardWithTx(BASE_TX);
+    const meta = screen.querySelector(".tx-meta");
+    expect(meta).not.toBeNull();
+    expect(meta.textContent).not.toContain("HDFC Savings");
+    expect(meta.textContent).not.toContain("·");
+  });
+
+  it("meta line does NOT contain the category name", async () => {
+    const screen = await renderDashboardWithTx(BASE_TX);
+    const meta = screen.querySelector(".tx-meta");
+    expect(meta).not.toBeNull();
+    expect(meta.textContent).not.toContain("Food & Dining");
+  });
+});
+
+// ===========================================================================
+// API bridge — getGmailCustomSenders / saveGmailCustomSenders
+// (tested via the real api.js by importing separately from the mock)
+// ===========================================================================
+describe("API.getGmailCustomSenders / saveGmailCustomSenders (real api.js)", () => {
+  // Import the real API module (not the vi.mock used for app.js tests)
+  let RealAPI;
+  const KEY = "fincoach-gmail-custom-senders";
+
+  beforeAll(async () => {
+    const mod = await import("../../static/js/api.js?real=1");
+    RealAPI = mod.API;
+  });
+
+  beforeEach(() => {
+    localStorage.removeItem(KEY);
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(KEY);
+  });
+
+  it("getGmailCustomSenders returns [] when key not set", () => {
+    const result = RealAPI.getGmailCustomSenders();
+    expect(result).toEqual([]);
+  });
+
+  it("getGmailCustomSenders returns [] when key is empty string", () => {
+    localStorage.setItem(KEY, "");
+    const result = RealAPI.getGmailCustomSenders();
+    expect(result).toEqual([]);
+  });
+
+  it("getGmailCustomSenders parses comma-separated string to array", () => {
+    localStorage.setItem(KEY, "a@b.com,c@d.com");
+    const result = RealAPI.getGmailCustomSenders();
+    expect(result).toEqual(["a@b.com", "c@d.com"]);
+  });
+
+  it("getGmailCustomSenders trims whitespace from entries", () => {
+    localStorage.setItem(KEY, "  a@b.com  ,  c@d.com  ");
+    const result = RealAPI.getGmailCustomSenders();
+    expect(result).toEqual(["a@b.com", "c@d.com"]);
+  });
+
+  it("saveGmailCustomSenders removes key when given empty array", () => {
+    localStorage.setItem(KEY, "a@b.com");
+    RealAPI.saveGmailCustomSenders([]);
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("saveGmailCustomSenders removes key when given null", () => {
+    localStorage.setItem(KEY, "a@b.com");
+    RealAPI.saveGmailCustomSenders(null);
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("saveGmailCustomSenders stores joined string for non-empty array", () => {
+    RealAPI.saveGmailCustomSenders(["a@b.com"]);
+    expect(localStorage.getItem(KEY)).toBe("a@b.com");
+  });
+
+  it("saveGmailCustomSenders stores multiple entries joined by comma", () => {
+    RealAPI.saveGmailCustomSenders(["a@b.com", "c@d.com"]);
+    expect(localStorage.getItem(KEY)).toBe("a@b.com,c@d.com");
+  });
+});
+
+// ===========================================================================
+// BUG-PROD-01: GDrive backup API key checkbox visibility follows provider
+// ===========================================================================
+describe("BUG-PROD-01: GDrive backup API key checkbox visibility", () => {
+  async function renderSettingsWithProvider(providerKey) {
+    AI.getSettings.mockReturnValue(
+      providerKey ? { provider: providerKey, apiKey: "sk-test", model: "m" } : {},
+    );
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: "user@example.com" });
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(true);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+    vi.spyOn(GDrive, "getLastModified").mockResolvedValue(null);
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("backup key checkbox is hidden when provider has requiresKey: false (Ollama)", async () => {
+    const screen = await renderSettingsWithProvider("ollama");
+    const field = screen.querySelector("#gdrive-backup-api-key-field");
+    expect(field).not.toBeNull();
+    expect(field.style.display).toBe("none");
+  });
+
+  it("backup key checkbox is visible when provider has requiresKey: true (Groq)", async () => {
+    const screen = await renderSettingsWithProvider("groq");
+    const field = screen.querySelector("#gdrive-backup-api-key-field");
+    expect(field).not.toBeNull();
+    expect(field.style.display).toBe("block");
+  });
+});
+
+// ===========================================================================
+// Transaction Tags — UI rendering
+// ===========================================================================
+
+// NOTE: Tag badges are rendered by txItemHTML(), used in the Dashboard's "Recent Transactions".
+// The Transactions list screen (loadTransactionList) renders a leaner template without tag badges.
+// See BUG: missing tag badges in loadTransactionList — tracked in GitHub Issues.
+describe("Transaction Tags: tag badges rendered via Dashboard txItemHTML", () => {
+  const BASE_TX = {
+    id: 99,
+    date: "2026-06-01",
+    transaction_type: "expense",
+    amount: 200,
+    account_name: "HDFC",
+    description: "Tagged purchase",
+    merchant_name: null,
+    merchant_upi_id: null,
+    category: null,
+  };
+
+  async function renderDashboardWithTx(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    mockAPI.getUpcomingBills.mockResolvedValue([]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getUpcomingBills.mockResolvedValue([]);
+  });
+
+  it("renders no .tx-tags div when transaction has no tags", async () => {
+    const screen = await renderDashboardWithTx({ ...BASE_TX, tags: [] });
+    const tagDivs = screen.querySelectorAll(".tx-tags");
+    expect(tagDivs).toHaveLength(0);
+  });
+
+  it("does not render .tag-badge in list view (tags shown in detail only)", async () => {
+    const screen = await renderDashboardWithTx({
+      ...BASE_TX,
+      tags: [
+        { id: 1, name: "vacation" },
+        { id: 2, name: "online" },
+      ],
+    });
+    const badges = screen.querySelectorAll(".tag-badge");
+    expect(badges.length).toBe(0);
+  });
+
+  it("does not render .tx-tags wrapper in list view", async () => {
+    const screen = await renderDashboardWithTx({
+      ...BASE_TX,
+      tags: [{ id: 1, name: "food" }],
+    });
+    const wrapper = screen.querySelector(".tx-tags");
+    expect(wrapper).toBeNull();
+  });
+});
+
+describe("Transaction Tags: tag filter select in transactions screen", () => {
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+  });
+
+  it("renders tag filter dropdown when tags exist", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([
+      { id: 1, name: "work" },
+      { id: 2, name: "personal" },
+    ]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 0,
+      net: 0,
+      transaction_count: 0,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    const screen = document.getElementById("screen");
+    const dropdown = screen.querySelector("#f-tags-dropdown");
+    expect(dropdown).not.toBeNull();
+    const checkboxes = dropdown.querySelectorAll("input[type=checkbox]");
+    expect(checkboxes.length).toBe(2);
+  });
+
+  it("does not render tag filter dropdown when no tags exist", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 0,
+      net: 0,
+      transaction_count: 0,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    const screen = document.getElementById("screen");
+    const dropdown = screen.querySelector("#f-tags-dropdown");
+    expect(dropdown).toBeNull();
+  });
+});
+
+describe("Transaction Tags: Taxonomy Tags tab rendering", () => {
+  afterEach(() => {
+    mockAPI.getTags.mockResolvedValue([]);
+  });
+
+  it("renders Tags tab button in taxonomy tab bar", async () => {
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    const renderFn = window.Router.routes["#/taxonomy"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    const screen = document.getElementById("screen");
+    const tagsBtn = screen.querySelector("[data-action='switch-taxonomy-tab'][data-mode='tags']");
+    expect(tagsBtn).not.toBeNull();
+    expect(tagsBtn.textContent.trim()).toBe("Tags");
+  });
+
+  it("renders empty state on Tags tab when no tags exist", async () => {
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+
+    // Switch to the tags tab
+    const switchTab = window.Router.routes["#/taxonomy"];
+    await switchTab();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const screen = document.getElementById("screen");
+    // Programmatically switch to the tags tab
+    const tagsTabBtn = screen.querySelector("[data-action='switch-taxonomy-tab'][data-mode='tags']");
+    expect(tagsTabBtn).not.toBeNull();
+    tagsTabBtn.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const content = document.getElementById("taxonomy-content");
+    expect(content).not.toBeNull();
+    expect(content.innerHTML).toContain("No tags yet");
+  });
+
+  it("renders tag list items when tags exist", async () => {
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([
+      { id: 1, name: "vacation" },
+      { id: 2, name: "work" },
+    ]);
+
+    const renderFn = window.Router.routes["#/taxonomy"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const screen = document.getElementById("screen");
+    const tagsTabBtn = screen.querySelector("[data-action='switch-taxonomy-tab'][data-mode='tags']");
+    expect(tagsTabBtn).not.toBeNull();
+    tagsTabBtn.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const content = document.getElementById("taxonomy-content");
+    expect(content).not.toBeNull();
+    expect(content.innerHTML).toContain("#vacation");
+    expect(content.innerHTML).toContain("#work");
+  });
+
+  it("shows FAB with data-action=show-add-tag when Tags tab is active", async () => {
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+
+    const renderFn = window.Router.routes["#/taxonomy"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const screen = document.getElementById("screen");
+    const tagsTabBtn = screen.querySelector("[data-action='switch-taxonomy-tab'][data-mode='tags']");
+    tagsTabBtn.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const fab = document.querySelector(".fab[data-action='show-add-tag']");
+    expect(fab).not.toBeNull();
+  });
+});
+
+describe("Transaction Tags: Reports screen tag filter", () => {
+  afterEach(() => {
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getSpendingReport.mockResolvedValue({ total_transactions: 0, categories: [] });
+  });
+
+  it("renders #report-tags-dropdown when tags exist", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([{ id: 1, name: "online" }]);
+    mockAPI.getSpendingReport.mockResolvedValue({ total_transactions: 0, categories: [] });
+
+    const renderFn = window.Router.routes["#/reports"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const screen = document.getElementById("screen");
+    const dropdown = screen.querySelector("#report-tags-dropdown");
+    expect(dropdown).not.toBeNull();
+    const labels = [...dropdown.querySelectorAll(".tag-filter-option")];
+    expect(labels.some((l) => l.textContent.includes("#online"))).toBe(true);
+  });
+
+  it("does not render #report-tags-dropdown when no tags exist", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getSpendingReport.mockResolvedValue({ total_transactions: 0, categories: [] });
+
+    const renderFn = window.Router.routes["#/reports"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const screen = document.getElementById("screen");
+    const dropdown = screen.querySelector("#report-tags-dropdown");
+    expect(dropdown).toBeNull();
+  });
+});
+
+// ===========================================================================
+// runSync — date-range validation
+// ===========================================================================
+describe("runSync date-range validation", () => {
+  beforeEach(async () => {
+    // Add gmailSearch to the shared mock (not in original mockAPI definition)
+    mockAPI.gmailSearch = vi.fn().mockResolvedValue({
+      found_count: 0,
+      import_results: { imported: 0, duplicates: 0, skipped: 0, errors: 0 },
+    });
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: "user@gmail.com" });
+    const renderFn = window.Router.routes["#/sync"];
+    await renderFn();
+    // Switch to date-range mode
+    const rangeBtn = document.querySelector('[data-action="set-sync-mode"][data-mode="range"]');
+    if (rangeBtn) rangeBtn.click();
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  afterEach(() => {
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    mockAPI.gmailSearch = vi.fn();
+  });
+
+  it("shows inline error message when start > end", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return; // fields only render when connected
+    startInput.value = "2025-06-15";
+    endInput.value = "2025-06-01";
+    document.getElementById("btn-sync").click();
+    await new Promise((r) => setTimeout(r, 50));
+    const resultsDiv = document.getElementById("sync-results");
+    expect(resultsDiv.innerHTML).toContain("Start date cannot be later than end date");
+  });
+
+  it("does NOT call API.gmailSearch when start > end", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return;
+    startInput.value = "2025-06-15";
+    endInput.value = "2025-06-01";
+    document.getElementById("btn-sync").click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockAPI.gmailSearch).not.toHaveBeenCalled();
+  });
+
+  it("re-enables the sync button after date validation error", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return;
+    startInput.value = "2025-06-15";
+    endInput.value = "2025-06-01";
+    const btn = document.getElementById("btn-sync");
+    btn.click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("calls API.gmailSearch when start === end (equal dates are valid)", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return;
+    startInput.value = "2025-06-01";
+    endInput.value = "2025-06-01";
+    document.getElementById("btn-sync").click();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mockAPI.gmailSearch).toHaveBeenCalledOnce();
+  });
+
+  it("calls API.gmailSearch when start < end (valid range)", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return;
+    startInput.value = "2025-05-01";
+    endInput.value = "2025-06-01";
+    document.getElementById("btn-sync").click();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mockAPI.gmailSearch).toHaveBeenCalledOnce();
+  });
+
+  it("no error shown in sync-results when start < end", async () => {
+    const startInput = document.getElementById("sync-start");
+    const endInput = document.getElementById("sync-end");
+    if (!startInput || !endInput) return;
+    startInput.value = "2025-05-01";
+    endInput.value = "2025-06-01";
+    document.getElementById("btn-sync").click();
+    await new Promise((r) => setTimeout(r, 100));
+    const resultsDiv = document.getElementById("sync-results");
+    expect(resultsDiv.innerHTML).not.toContain("Start date cannot be later than end date");
+  });
+});
+
+// ===========================================================================
+// Privacy mode helpers
+// ===========================================================================
+describe("Privacy mode helpers", () => {
+  beforeEach(() => {
+    localStorage.removeItem("fincoach-privacy-mode");
+    document.body.classList.add("privacy-active");
+    for (const el of document.querySelectorAll(".modal-overlay")) el.remove();
+  });
+
+  afterEach(() => {
+    localStorage.removeItem("fincoach-privacy-mode");
+    document.body.classList.remove("privacy-active");
+    vi.restoreAllMocks();
+  });
+
+  it("dashboard renders .amount-private spans for monetary values", async () => {
+    mockAPI.getAccounts.mockResolvedValue([
+      {
+        id: 1,
+        name: "HDFC Savings",
+        account_type: "savings",
+        balance: 10000,
+        effective_balance: 10000,
+        balance_updated_at: "2026-01-01",
+        is_active: true,
+        merged_accounts: [],
+        merged_into_id: null,
+      },
+    ]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    const screen = document.getElementById("screen");
+    const amountSpans = screen.querySelectorAll(".amount-private");
+    expect(amountSpans.length).toBeGreaterThan(0);
+  });
+
+  it(".balance-amount contains a .amount-private child span", async () => {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    const balanceAmount = document.querySelector(".balance-amount");
+    expect(balanceAmount).not.toBeNull();
+    expect(balanceAmount.querySelector(".amount-private")).not.toBeNull();
+  });
+
+  it("#privacy-toggle-btn is present in the layout header", () => {
+    const btn = document.getElementById("privacy-toggle-btn");
+    expect(btn).not.toBeNull();
+  });
+
+  it("clicking #privacy-toggle-btn removes privacy-active from body when body is hidden", () => {
+    document.body.classList.add("privacy-active");
+    const btn = document.getElementById("privacy-toggle-btn");
+    expect(btn).not.toBeNull();
+    btn.click();
+    expect(document.body.classList.contains("privacy-active")).toBe(false);
+  });
+
+  it("clicking #privacy-toggle-btn adds privacy-active when body is revealed and privacy is enabled", () => {
+    document.body.classList.remove("privacy-active");
+    localStorage.removeItem("fincoach-privacy-mode"); // absent = enabled
+    const btn = document.getElementById("privacy-toggle-btn");
+    btn.click();
+    expect(document.body.classList.contains("privacy-active")).toBe(true);
+  });
+
+  it("when privacy mode is disabled (key=false), hidePrivacy does not add privacy-active", () => {
+    localStorage.setItem("fincoach-privacy-mode", "false");
+    document.body.classList.remove("privacy-active");
+    // Toggle button click when not hidden → calls hidePrivacy()
+    // hidePrivacy: isPrivacyEnabled() = false → does NOT add class
+    const btn = document.getElementById("privacy-toggle-btn");
+    btn.click();
+    expect(document.body.classList.contains("privacy-active")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Transaction notes field
+// ===========================================================================
+describe("Transaction notes field", () => {
+  const BASE_TX = {
+    id: 1,
+    date: "2026-05-15",
+    transaction_type: "expense",
+    amount: -200,
+    account_name: "HDFC",
+    category: null,
+    tags: [],
+  };
+
+  async function renderDashboardWithTxNotes(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    const renderFn = window.Router.routes["#/"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  async function renderTxListWithTxNotes(tx) {
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    for (const el of document.querySelectorAll(".modal-overlay")) el.remove();
+  });
+
+  it("dashboard shows .tx-note when description and merchant_name are both set", async () => {
+    const screen = await renderDashboardWithTxNotes({
+      ...BASE_TX,
+      merchant_name: "Test Merchant",
+      merchant_upi_id: null,
+      description: "Birthday dinner",
+    });
+    const note = screen.querySelector(".tx-note");
+    expect(note).not.toBeNull();
+    expect(note.textContent).toContain("Birthday dinner");
+  });
+
+  it("dashboard hides .tx-note when description is null", async () => {
+    const screen = await renderDashboardWithTxNotes({
+      ...BASE_TX,
+      merchant_name: "Test Merchant",
+      merchant_upi_id: null,
+      description: null,
+    });
+    expect(screen.querySelector(".tx-note")).toBeNull();
+  });
+
+  it("dashboard hides .tx-note when description exists but no merchant_name or merchant_upi_id", async () => {
+    const screen = await renderDashboardWithTxNotes({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: "Note without merchant",
+    });
+    expect(screen.querySelector(".tx-note")).toBeNull();
+  });
+
+  it("dashboard .tx-note shows when merchant_upi_id is set (not merchant_name)", async () => {
+    const screen = await renderDashboardWithTxNotes({
+      ...BASE_TX,
+      merchant_name: null,
+      merchant_upi_id: "coffee@upi",
+      description: "My coffee note",
+    });
+    const note = screen.querySelector(".tx-note");
+    expect(note).not.toBeNull();
+    expect(note.textContent).toContain("My coffee note");
+  });
+
+  it("dashboard .tx-note truncates description to 60 chars with ellipsis", async () => {
+    const screen = await renderDashboardWithTxNotes({
+      ...BASE_TX,
+      merchant_name: "Test Merchant",
+      merchant_upi_id: null,
+      description: "A".repeat(100),
+    });
+    const note = screen.querySelector(".tx-note");
+    expect(note).not.toBeNull();
+    // truncate(str, 60) produces str.slice(0,60) + '…' — max 61 chars
+    expect(note.textContent.length).toBeLessThanOrEqual(62);
+  });
+
+  it("transactions list shows .tx-note when description and merchant_name are set", async () => {
+    const screen = await renderTxListWithTxNotes({
+      ...BASE_TX,
+      merchant_name: "List Merchant",
+      merchant_upi_id: null,
+      description: "List note text",
+    });
+    const notes = screen.querySelectorAll(".tx-note");
+    expect(notes.length).toBeGreaterThan(0);
+    expect(notes[0].textContent).toContain("List note text");
+  });
+
+  it("transactions list hides .tx-note when description is null", async () => {
+    const screen = await renderTxListWithTxNotes({
+      ...BASE_TX,
+      merchant_name: "Shop",
+      merchant_upi_id: null,
+      description: null,
+    });
+    expect(screen.querySelectorAll(".tx-note").length).toBe(0);
+  });
+
+  it("edit overlay: #edit-desc has empty value when notes is null", async () => {
+    const txWithDesc = {
+      ...BASE_TX,
+      merchant_name: "Shop",
+      merchant_upi_id: null,
+      description: "old note",
+    };
+    mockAPI.getTransactions.mockResolvedValue([txWithDesc]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const editEl = document.querySelector('[data-action="show-edit-tx"]');
+    expect(editEl).not.toBeNull();
+    editEl.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const editDesc = document.getElementById("edit-desc");
+    expect(editDesc).not.toBeNull();
+    // No notes set — value should be empty
+    expect(editDesc.value).toBe("");
+    expect(editDesc.placeholder).toBe("Add Notes");
+  });
+
+  it("edit overlay: #edit-desc placeholder is 'Add Notes'", async () => {
+    const txNoDesc = {
+      ...BASE_TX,
+      merchant_name: "Shop",
+      merchant_upi_id: null,
+      description: null,
+    };
+    mockAPI.getTransactions.mockResolvedValue([txNoDesc]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const editEl = document.querySelector('[data-action="show-edit-tx"]');
+    expect(editEl).not.toBeNull();
+    editEl.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const editDesc = document.getElementById("edit-desc");
+    expect(editDesc).not.toBeNull();
+    expect(editDesc.placeholder).toBe("Add Notes");
+  });
+
+  it("edit overlay label reads 'Notes' (not 'Description')", async () => {
+    const txData = {
+      ...BASE_TX,
+      merchant_name: "Shop",
+      merchant_upi_id: null,
+      description: null,
+    };
+    mockAPI.getTransactions.mockResolvedValue([txData]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const editEl = document.querySelector('[data-action="show-edit-tx"]');
+    editEl.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const modal = document.querySelector(".modal-overlay .modal");
+    expect(modal).not.toBeNull();
+    const labels = [...modal.querySelectorAll("label")];
+    expect(labels.some((l) => l.textContent.trim() === "Notes")).toBe(true);
+    expect(labels.some((l) => l.textContent.trim() === "Description")).toBe(false);
+  });
+
+  it("add transaction form label reads 'Notes'", async () => {
+    const renderFn = window.Router.routes["#/transactions/new"];
+    await renderFn();
+    const screen = document.getElementById("screen");
+    const labels = [...screen.querySelectorAll("label")];
+    expect(labels.some((l) => l.textContent.trim() === "Notes")).toBe(true);
+  });
+
+  it("add transaction form #new-desc placeholder is 'Add a personal note…'", async () => {
+    const renderFn = window.Router.routes["#/transactions/new"];
+    await renderFn();
+    const screen = document.getElementById("screen");
+    const descInput = screen.querySelector("#new-desc");
+    expect(descInput).not.toBeNull();
+    expect(descInput.placeholder).toBe("Add a personal note\u2026");
+  });
+
+  // -------------------------------------------------------------------------
+  // Gmail transaction: Notes field shown as placeholder, not pre-filled value
+  // -------------------------------------------------------------------------
+  it("edit overlay: Gmail tx with no notes has empty value and 'Add Notes' placeholder", async () => {
+    const gmailTx = {
+      ...BASE_TX,
+      gmail_message_id: "msg_abc123",
+      merchant_name: "HDFC MF",
+      merchant_upi_id: null,
+      description: "Merchant: HDFC MF | Method: UPI | Purpose: SIP",
+    };
+    mockAPI.getTransactions.mockResolvedValue([gmailTx]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const editEl = document.querySelector('[data-action="show-edit-tx"]');
+    expect(editEl).not.toBeNull();
+    editEl.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const editDesc = document.getElementById("edit-desc");
+    expect(editDesc).not.toBeNull();
+    // Value must be empty — no notes set
+    expect(editDesc.value).toBe("");
+    // Placeholder is now generic
+    expect(editDesc.placeholder).toBe("Add Notes");
+  });
+
+  it("edit overlay: Gmail tx with no description shows generic placeholder", async () => {
+    const gmailTx = {
+      ...BASE_TX,
+      gmail_message_id: "msg_xyz",
+      merchant_name: null,
+      merchant_upi_id: null,
+      description: null,
+    };
+    mockAPI.getTransactions.mockResolvedValue([gmailTx]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const editEl = document.querySelector('[data-action="show-edit-tx"]');
+    editEl.click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const editDesc = document.getElementById("edit-desc");
+    expect(editDesc).not.toBeNull();
+    expect(editDesc.value).toBe("");
+    expect(editDesc.placeholder).toBe("Add Notes");
+  });
+
+  it("edit overlay: modal data-is-gmail attribute has been removed", async () => {
+    // Verify that data-is-gmail is no longer present on the modal
+    mockAPI.getTransactions.mockResolvedValue([{ ...BASE_TX, gmail_message_id: "msg1", description: "desc", merchant_name: null, merchant_upi_id: null }]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({ total_income: 0, total_expense: 200, net: -200, transaction_count: 1 });
+    await window.Router.routes["#/transactions"]();
+    await new Promise((r) => setTimeout(r, 0));
+    document.querySelector('[data-action="show-edit-tx"]').click();
+    await new Promise((r) => setTimeout(r, 100));
+    const modal = document.querySelector(".modal-overlay .modal");
+    expect(modal.dataset.isGmail).toBeUndefined();
+  });
+
+  it("edit overlay: Gmail tx with user notes shows notes as value (not placeholder)", async () => {
+    const gmailTxWithNotes = {
+      ...BASE_TX,
+      gmail_message_id: "msg_with_notes",
+      merchant_name: "HDFC MF",
+      merchant_upi_id: null,
+      description: "Merchant: HDFC MF | Method: UPI | Purpose: SIP",
+      notes: "My custom note",
+    };
+    mockAPI.getTransactions.mockResolvedValue([gmailTxWithNotes]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+
+    document.querySelector('[data-action="show-edit-tx"]').click();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const editDesc = document.getElementById("edit-desc");
+    expect(editDesc).not.toBeNull();
+    // User notes must show as normal text value
+    expect(editDesc.value).toBe("My custom note");
+    // Placeholder is now generic
+    expect(editDesc.placeholder).toBe("Add Notes");
+  });
+});
+
+// ===========================================================================
+// detectPaymentType
+// ===========================================================================
+describe("detectPaymentType", () => {
+  test("UPI via merchantUpiId set", () => {
+    expect(window.detectPaymentType("", "hdfc@upi")).toBe("UPI");
+  });
+  test("UPI via description keyword UPI", () => {
+    expect(window.detectPaymentType("Payment via UPI", null)).toBe("UPI");
+  });
+  test("UPI via method: UPI in description", () => {
+    expect(window.detectPaymentType("method: UPI | SIP debit", null)).toBe("UPI");
+  });
+  test("NEFT", () => {
+    expect(window.detectPaymentType("NEFT transfer ref 123", null)).toBe("NEFT");
+  });
+  test("RTGS", () => {
+    expect(window.detectPaymentType("RTGS payment to vendor", null)).toBe("RTGS");
+  });
+  test("IMPS", () => {
+    expect(window.detectPaymentType("IMPS payment received", null)).toBe("IMPS");
+  });
+  test("Wallet \u2014 generic Wallet keyword", () => {
+    expect(window.detectPaymentType("Wallet payment", null)).toBe("Wallet");
+  });
+  test("Wallet \u2014 Amazon Pay Wallet", () => {
+    expect(window.detectPaymentType("Amazon Pay Wallet debit", null)).toBe("Wallet");
+  });
+  test("UPI beats Wallet \u2014 PhonePe UPI via merchantUpiId", () => {
+    expect(window.detectPaymentType("PhonePe Wallet transaction", "abc@ybl")).toBe("UPI");
+  });
+  test("UPI beats Wallet \u2014 UPI keyword in description alongside Wallet", () => {
+    expect(window.detectPaymentType("Wallet transfer via UPI", null)).toBe("UPI");
+  });
+  test("Unknown for unrecognized description", () => {
+    expect(window.detectPaymentType("ATM cash withdrawal", null)).toBe("Unknown");
+  });
+  test("Unknown when description is null and no upiId", () => {
+    expect(window.detectPaymentType(null, null)).toBe("Unknown");
+  });
+  test("Wallet \u2014 Method: Wallet in description (not UPI)", () => {
+    expect(window.detectPaymentType("Merchant: Amazon | Method: Wallet | Via: Amazon Pay", null)).toBe("Wallet");
+  });
+  test("Wallet \u2014 Method: Wallet not confused as UPI even with Amazon Pay keyword", () => {
+    expect(window.detectPaymentType("Merchant: Amazon | Method: Wallet | Via: Amazon Pay", null)).toBe("Wallet");
+  });
+  test("UPI \u2014 Method: UPI still wins when merchantUpiId also present", () => {
+    expect(window.detectPaymentType("Merchant: Amazon | Method: UPI | Via: Amazon Pay", "amazonpay@apl")).toBe("UPI");
+  });
+});
+
+// ===========================================================================
+// Transaction Type field in edit modal
+// ===========================================================================
+describe("Transaction Type field", () => {
+  const BASE_TX = {
+    id: 1,
+    date: "2026-05-15",
+    transaction_type: "expense",
+    amount: -200,
+    account_name: "HDFC",
+    category: null,
+    tags: [],
+  };
+
+  async function openEditModalWith(tx) {
+    mockAPI.getTransactions.mockResolvedValue([tx]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 200,
+      net: -200,
+      transaction_count: 1,
+    });
+    await window.Router.routes["#/transactions"]();
+    await new Promise((r) => setTimeout(r, 0));
+    document.querySelector('[data-action="show-edit-tx"]').click();
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  afterEach(() => {
+    for (const el of document.querySelectorAll(".modal-overlay")) el.remove();
+  });
+
+  it("edit overlay: Transaction Type field exists and is readonly", async () => {
+    await openEditModalWith({ ...BASE_TX, merchant_upi_id: null, description: null });
+    const payTypeEl = document.getElementById("edit-payment-type");
+    expect(payTypeEl).not.toBeNull();
+    expect(payTypeEl.readOnly).toBe(true);
+  });
+
+  it("edit overlay: Transaction Type shows 'UPI' when merchant_upi_id is set", async () => {
+    await openEditModalWith({ ...BASE_TX, merchant_upi_id: "hdfc@upi", description: null });
+    expect(document.getElementById("edit-payment-type").value).toBe("UPI");
+  });
+
+  it("edit overlay: Transaction Type shows 'NEFT' for NEFT description", async () => {
+    await openEditModalWith({ ...BASE_TX, merchant_upi_id: null, description: "NEFT transfer ref 456" });
+    expect(document.getElementById("edit-payment-type").value).toBe("NEFT");
+  });
+
+  it("edit overlay: Transaction Type shows 'Unknown' when no patterns match", async () => {
+    await openEditModalWith({ ...BASE_TX, merchant_upi_id: null, description: null });
+    expect(document.getElementById("edit-payment-type").value).toBe("Unknown");
+  });
+});

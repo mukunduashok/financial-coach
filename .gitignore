@@ -1,0 +1,13 @@
+.env
+
+# JS tooling
+node_modules/
+.biome/
+.wrangler/
+
+# sql.js WASM (downloaded, not committed)
+static/js/sql-wasm.js
+static/js/sql-wasm.wasm
+
+# Test artifacts
+test-results/

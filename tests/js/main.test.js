@@ -1,0 +1,432 @@
+/**
+ * Unit tests for static/js/main.js — boot sequence and error handling.
+ *
+ * Verifies that the XSS fix (using textContent instead of innerHTML) is in
+ * place when the DB init fails during application boot.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+describe("Boot Error Handling", () => {
+  let appEl;
+
+  beforeEach(() => {
+    // Reset module registry so main.js re-executes on each dynamic import
+    vi.resetModules();
+    appEl = document.createElement("div");
+    appEl.id = "app";
+    document.body.appendChild(appEl);
+    delete window.__xss;
+  });
+
+  afterEach(() => {
+    appEl.remove();
+    delete window.__xss;
+  });
+
+  it("renders boot error via textContent, not innerHTML, preventing XSS", async () => {
+    const xssPayload = '<img src=x onerror="window.__xss=true">';
+
+    // Register non-hoisted mocks AFTER resetModules so they apply to the fresh import
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockRejectedValue(new Error(xssPayload)) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    // Dynamic import triggers main.js module execution (boot() is called immediately
+    // because jsdom readyState is "complete", not "loading")
+    await import("../../static/js/main.js");
+
+    // Allow the async boot() to finish
+    await new Promise((r) => setTimeout(r, 50));
+
+    const p = appEl.querySelector("p");
+    expect(p).not.toBeNull();
+
+    // Error text must appear as plain text — the raw XSS string, not executed
+    expect(p.textContent).toContain("<img");
+
+    // No <img> element should have been injected (innerHTML would create one)
+    expect(appEl.querySelector("img")).toBeNull();
+
+    // The onerror handler must NOT have executed
+    expect(window.__xss).toBeUndefined();
+  });
+
+  it("appends nothing when #app element is absent", async () => {
+    // Remove the app element before boot runs
+    appEl.remove();
+
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockRejectedValue(new Error("DB failure")) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    // Should not throw even when #app is missing
+    await expect(import("../../static/js/main.js")).resolves.not.toThrow();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Re-create for afterEach cleanup
+    appEl = document.createElement("div");
+  });
+
+  it("dispatches db-ready event on successful DB init", async () => {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    let dbReadyFired = false;
+    document.addEventListener("db-ready", () => {
+      dbReadyFired = true;
+    });
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(dbReadyFired).toBe(true);
+  });
+});
+
+describe("Session Guard", () => {
+  let appEl;
+
+  beforeEach(() => {
+    vi.resetModules();
+    appEl = document.createElement("div");
+    appEl.id = "app";
+    document.body.appendChild(appEl);
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    appEl.remove();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("wipes session when last activity was more than 6 hours ago", async () => {
+    const wipeSession = vi.fn(async () => {});
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    const sevenHoursAgo = Date.now() - 7 * 60 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(sevenHoursAgo));
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(wipeSession).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem("fincoach-session-expired")).toBe("1");
+  });
+
+  it("does not wipe when last activity was less than 6 hours ago", async () => {
+    const wipeSession = vi.fn(async () => {});
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    const oneHourAgo = Date.now() - 1 * 60 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(oneHourAgo));
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(wipeSession).not.toHaveBeenCalled();
+  });
+
+  it("does not wipe on first launch (no last activity recorded)", async () => {
+    const wipeSession = vi.fn(async () => {});
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    // No SESSION_LAST_ACTIVITY_KEY set
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(wipeSession).not.toHaveBeenCalled();
+  });
+
+  it("does not wipe when trusted device is set", async () => {
+    const wipeSession = vi.fn(async () => {});
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+
+    const tenHoursAgo = Date.now() - 10 * 60 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(tenHoursAgo));
+    localStorage.setItem("fincoach-trusted-device", "true");
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(wipeSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("Session expiry warning", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    const appEl = document.createElement("div");
+    appEl.id = "app";
+    document.body.appendChild(appEl);
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    document.getElementById("app")?.remove();
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("does not dispatch session-expiry-warning when idle is below warn threshold", async () => {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { maybeAutoSync: vi.fn() } }));
+
+    // 5 hours idle — below the 5h30m warn threshold
+    localStorage.setItem("fincoach-session-last-activity", String(Date.now() - 5 * 60 * 60 * 1000));
+
+    let warned = false;
+    document.addEventListener("session-expiry-warning", () => { warned = true; }, { once: true });
+
+    await import("../../static/js/main.js");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(warned).toBe(false);
+  });
+
+  it("dispatches session-expiry-warning when idle exceeds warn threshold", async () => {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { maybeAutoSync: vi.fn() } }));
+
+    // 5h35m idle — above the 5h30m warn threshold, below 6h expiry
+    const idleMs = 5 * 60 * 60 * 1000 + 35 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(Date.now() - idleMs));
+
+    let warned = false;
+    document.addEventListener("session-expiry-warning", () => { warned = true; }, { once: true });
+
+    await import("../../static/js/main.js");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(warned).toBe(true);
+    expect(sessionStorage.getItem("fincoach-session-expiry-warned")).toBe("1");
+  });
+
+  it("does not dispatch session-expiry-warning when already warned flag is set", async () => {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { maybeAutoSync: vi.fn() } }));
+
+    const idleMs = 5 * 60 * 60 * 1000 + 35 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(Date.now() - idleMs));
+    sessionStorage.setItem("fincoach-session-expiry-warned", "1"); // already warned
+
+    let warnCount = 0;
+    document.addEventListener("session-expiry-warning", () => { warnCount++; });
+
+    await import("../../static/js/main.js");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(warnCount).toBe(0);
+  });
+
+  it("does not dispatch session-expiry-warning when trusted device is set", async () => {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { maybeAutoSync: vi.fn() } }));
+
+    const idleMs = 5 * 60 * 60 * 1000 + 35 * 60 * 1000;
+    localStorage.setItem("fincoach-session-last-activity", String(Date.now() - idleMs));
+    localStorage.setItem("fincoach-trusted-device", "true");
+
+    let warned = false;
+    document.addEventListener("session-expiry-warning", () => { warned = true; }, { once: true });
+
+    await import("../../static/js/main.js");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(warned).toBe(false);
+  });
+
+  it("does NOT call Gmail.maybeAutoSync from the 1-minute interval handler", async () => {
+    const maybeAutoSync = vi.fn();
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { maybeAutoSync } }));
+
+    await import("../../static/js/main.js");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(maybeAutoSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("_handleOAuthCallback (iOS PWA OAuth redirect)", () => {
+  let origLocation;
+
+  beforeEach(() => {
+    vi.resetModules();
+    origLocation = window.location;
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      writable: true,
+      configurable: true,
+      value: origLocation,
+    });
+    vi.restoreAllMocks();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  function mockLocation({ search = "", hash = "" } = {}) {
+    Object.defineProperty(window, "location", {
+      writable: true,
+      configurable: true,
+      value: { search, hash, pathname: "/" },
+    });
+    vi.spyOn(history, "replaceState").mockImplementation(() => {});
+  }
+
+  function setupDefaultMocks() {
+    vi.doMock("../../static/js/db.js", () => ({
+      DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
+    }));
+    vi.doMock("../../static/js/ai.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/app.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({}));
+  }
+
+  it("is a no-op when ?gmail-oauth param is absent", async () => {
+    mockLocation({ search: "", hash: "" });
+    setupDefaultMocks();
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+    expect(sessionStorage.getItem("gmail-oauth-redirect-success")).toBeNull();
+  });
+
+  it("saves tokens to localStorage when success payload is present", async () => {
+    const payload = {
+      type: "gmail-oauth",
+      status: "success",
+      access_token: "at123",
+      refresh_token: "rt456",
+      expires_in: 3600,
+    };
+    const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
+    mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
+    setupDefaultMocks();
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const saved = JSON.parse(localStorage.getItem("fincoach-gmail-settings"));
+    expect(saved.accessToken).toBe("at123");
+    expect(saved.refreshToken).toBe("rt456");
+    expect(typeof saved.tokenExpiry).toBe("number");
+    expect(sessionStorage.getItem("gmail-oauth-redirect-success")).toBe("1");
+  });
+
+  it("stores error message in sessionStorage when status is error", async () => {
+    const payload = { type: "gmail-oauth", status: "error", error: "access_denied" };
+    const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
+    mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
+    setupDefaultMocks();
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sessionStorage.getItem("gmail-oauth-redirect-error")).toBe("access_denied");
+    expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+  });
+
+  it("silently ignores malformed base64 without throwing", async () => {
+    mockLocation({ search: "?gmail-oauth=1", hash: "#not-valid-base64!!!" });
+    setupDefaultMocks();
+
+    await expect(import("../../static/js/main.js")).resolves.not.toThrow();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+  });
+
+  it("ignores success payload when access_token is missing", async () => {
+    const payload = {
+      type: "gmail-oauth",
+      status: "success",
+      refresh_token: "rt456",
+      expires_in: 3600,
+    };
+    const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
+    mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
+    setupDefaultMocks();
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+    expect(sessionStorage.getItem("gmail-oauth-redirect-success")).toBeNull();
+  });
+});
