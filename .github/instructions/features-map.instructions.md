@@ -13,7 +13,7 @@ All routes are registered at the bottom of `app.js` using `Router.register(hash,
 
 | Route | Render Function | Screen Description |
 |-------|----------------|-------------------|
-| `#/` | `renderDashboard()` | Shows total balance, monthly income/expenses, recent 10 transactions, and upcoming bills panel |
+| `#/` | `renderDashboard()` | Shows total balance, monthly income/expenses, recent 10 transactions, and an upcoming-bills panel driven by pending transaction follow-ups |
 | `#/transactions` | `renderTransactions()` | Displays all transactions with filters (date range, type, account, category, tag), infinite scroll pagination (50/page), totals bar showing income/expense/net |
 | `#/transactions/new` | `renderAddTransaction()` | New transaction form with merchant autocomplete and auto-categorization based on LLM |
 | `#/accounts` | `renderAccounts()` | Account cards showing balances with merge hierarchy support (≤5 levels), create/delete actions |
@@ -97,12 +97,11 @@ const tx = await DB.createTransaction({
 // Update transaction (includes merchant learning)
 const updated = await DB.updateTransaction(id, { category_id: 5 });
 // If merchant_upi_id exists and learn_merchant=true, creates/updates merchant record
+// If merchant_name changed and learn_merchant_name=true (FINCO-50), the new name is
+// remembered for past & future transactions from the same merchant (see rename memory below)
 
 // Delete transaction
 await DB.deleteTransaction(id);
-
-// Get recurring patterns (automatically detected from transaction history)
-const patterns = await DB.getRecurringPatterns();
 ```
 
 ### Categories Management
@@ -154,19 +153,6 @@ await DB.updateMerchantCategory(id, newCategoryId);
 await DB.deleteMerchant(id);
 ```
 
-### Recurring Pattern Detection
-
-```js
-// Auto-detect recurring transactions from history
-await DB.detectRecurring(accountId);  // Optional: specific account or all accounts
-
-// Get recurring transactions (marked by detectRecurring)
-const recurringTxs = await DB.getRecurringTransactions();
-
-// Delete a recurring pattern
-await DB.deleteRecurringPattern(id);
-```
-
 ### Tags Management
 
 ```js
@@ -184,28 +170,70 @@ await DB.deleteTag(id);
 await DB.setTransactionTags(txId, [tagId1, tagId2]);
 ```
 
-### Upcoming Bills (recurring patterns)
+### Transaction Follow-ups / Reminders (FINCO-22)
+
+Follow-ups are attached 1:1 to a transaction (table `transaction_follow_ups`) and created,
+edited, or removed from the transaction edit modal ("Track as Follow-up / Reminder" toggle).
+They are managed in the Transactions → "Bills & Reminders" tab (filter chips All/Pending/Done,
+per-row Mark done / Reopen / Open / Remove, inline due-date + recurring toggle). This replaced
+the old auto-detected recurring-pattern Bills UI.
 
 ```js
-// Get upcoming bills from recurring_patterns due in the next N days
+// CRUD
+const fu = await DB.createFollowUp(transactionId, { title, follow_up_type, due_date,
+  is_recurring, recurrence, notes }); // status defaults to 'pending'
+await DB.updateFollowUp(id, fields);         // bumps updated_at
+await DB.deleteFollowUp(id);                 // records a 'follow_up' tombstone (keyed on tx_id)
+await DB.getFollowUp(transactionId);         // single follow-up for a transaction
+await DB.getFollowUpById(id);
+await DB.getFollowUps({ status, follow_up_type }); // pending-first (overdue→soon→later→undated),
+                                                    // then done by completed_at desc
+
+// Completion semantics
+await DB.markFollowUpDone(id); // non-recurring → status 'done' + completed_at;
+                               // recurring → stays 'pending', due_date rolls forward
+                               // (weekly +7d, monthly +1mo, quarterly +3mo, yearly +1yr)
+await DB.reopenFollowUp(id);   // status 'pending', clears completed_at
+
+// Dashboard widget — pending follow-ups with due_date within N days
 const bills = await DB.getUpcomingBills(days = 7);
-// Returns: [{ description_pattern, amount, frequency_days, last_seen, next_due, ... }, ...]
 ```
 
-### Merchants — Identity & Rename (v4)
+Sync: `transaction_follow_ups` carries `updated_at`; `mergeFromJSON`/`exportAsJSON` use
+natural-key UNION + last-writer-wins with `follow_up` tombstones keyed on the parent
+`transaction_id`.
+
+### Merchants — Identity & Rename (v4 + FINCO-50 rename memory)
 
 Merchant identity is stable: each merchant has an immutable `merchant_key` (from UPI id or
 name slug) plus learned `merchant_aliases`. Transactions link via `transactions.merchant_id`.
 A rename only changes the merchant's `display_name` — it does NOT mutate any transaction's
 stored `merchant_name`. The displayed name is resolved at READ time in
 `_buildTransactionResponse` (a linked merchant's `display_name` wins over the row's text), so
-a rename automatically surfaces on all of that merchant's transactions. There is no
-propagation prompt (`#mname-yes`) and no `DB.propagateMerchantName` method.
+a rename automatically surfaces on all of that merchant's transactions.
 
 ```js
 // Rename a merchant — surfaces on all linked transactions via the merchant_id join
 await DB.updateMerchant(merchantId, { merchant_name: "New Display Name" });
 ```
+
+**Merchant rename memory (FINCO-50).** When a merchant name is edited on a transaction in the
+Edit Transaction modal, `saveTransaction` (app.js) compares the typed name to the original.
+If it changed, `showMerchantRenamePrompt` asks *"Remember this merchant name?"* with
+`#merchant-name-yes` ("Yes, apply to all") / `#merchant-name-no` ("No, just this one").
+Confirming sends `learn_merchant_name: true` in the single `API.updateTransaction` call
+(alongside `learn_merchant` if the category also changed). `DB.updateTransaction` then:
+
+- For an **unlinked** transaction: creates/links a merchant identity with the new
+  `display_name`, keyed on the ORIGINAL merchant string, and records aliases for both the
+  normalized original and new names.
+- For an **already-linked** transaction: updates the merchant's `display_name` (keeping the
+  original name resolvable via `merchant_key`/alias).
+
+As a result, future transactions carrying the SAME original merchant string auto-map to the
+renamed name (and inherit the learned category when `learn_merchant` was also set). Declining
+the prompt renames only that single row and leaves other/future transactions untouched. No
+rename prompt appears when the merchant name is unchanged.
 
 ### Goals Management
 
@@ -376,8 +404,6 @@ API.getTransactionTotals(params)
 API.createTransaction(data)
 API.updateTransaction(id, data)
 API.deleteTransaction(id)
-API.detectRecurring(accountId?)
-API.getRecurringPatterns()
 ```
 
 ### Categories Bridge
@@ -408,9 +434,16 @@ API.deleteTag(id)
 API.setTransactionTags(txId, tagIds)
 ```
 
-### Bills Bridge
+### Follow-ups / Bills Bridge
 ```js
-API.getUpcomingBills(days?)  // default 7 days
+API.createFollowUp(transactionId, data)
+API.updateFollowUp(id, fields)
+API.deleteFollowUp(id)
+API.getFollowUp(transactionId)
+API.getFollowUps(filters)     // { status?, follow_up_type? }
+API.markFollowUpDone(id)
+API.reopenFollowUp(id)
+API.getUpcomingBills(days?)   // default 7 days — pending follow-ups due within the window
 ```
 
 ### Gmail Bridge
@@ -545,6 +578,18 @@ All application configuration is stored in `localStorage` using these standardiz
 | `GDRIVE_BACKUP_API_KEY_KEY` | `fincoach-gdrive-backup-api-key` | Include API key in backup |
 | `ONBOARDED_KEY` | `fincoach-onboarded` | User completed onboarding |
 
+### Deployment config (env.js)
+
+`GMAIL_PROXY_URL` (the Cloudflare Worker OAuth URL) is deployment-specific rather
+than per-user. It is sourced from `.env` (`GMAIL_PROXY_URL=…`, see `.env.example`)
+and baked into `static/js/env.js` by the `make gen-env` target (also run by
+`make dev` / `make deploy`). `env.js` is git-ignored (generated); `static/js/env.example.js`
+is the tracked template. `index.html` loads `<script src="/js/env.js">` before
+`main.js`, and `sw.js` precaches `/js/env.js`. `env.js` sets
+`window.__FINCOACH_CONFIG__.GMAIL_PROXY_URL`, which `config.js` reads at load
+(`globalThis.__FINCOACH_CONFIG__?.GMAIL_PROXY_URL ?? "<placeholder>"`), falling
+back to the placeholder Worker URL when no global is set.
+
 ## Test Structure
 
 ### Unit Tests (`tests/js/`) - Vitest
@@ -561,7 +606,8 @@ tests/js/
 ├── gmail-proxy.test.js         # Cloudflare Worker OAuth proxy tests
 ├── main.test.js                # Session expiry logic
 ├── theme.test.js               # Theme persistence and toggle
-└── utils.test.js               # Utility functions (maskPII, formatCurrency, etc.)
+├── utils.test.js               # Utility functions (maskPII, formatCurrency, etc.)
+└── config.test.js              # GMAIL_PROXY_URL runtime resolution from env.js
 ```
 
 ### E2E Tests (`tests/e2e/js/`) - Playwright
@@ -569,7 +615,7 @@ tests/js/
 ```
 tests/e2e/js/
 ├── accounts.spec.js            # Account management flows
-├── bills.spec.js               # Upcoming bills panel on Dashboard
+├── bills.spec.js               # Transaction follow-ups: edit-modal flag, Bills & Reminders tab, dashboard widget
 ├── budgets.spec.js             # Budget tracking and alerts
 ├── bugs.spec.js                # Regression tests for all known bugs
 ├── chat.spec.js                # Chat interface, AI responses

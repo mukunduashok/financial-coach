@@ -257,12 +257,12 @@ test.describe("MerchantNamePropagation", () => {
     });
   }
 
-  // v4 model: renaming a merchant no longer mutates each transaction's stored name and
-  // there is no "Update merchant name everywhere?" propagation prompt. Editing a
-  // transaction's merchant name writes only to that row, while a merchant rename via the
-  // Taxonomy screen surfaces on every linked transaction through the merchant_id join.
+  // FINCO-50: renaming a merchant on a transaction now offers to remember the new name for
+  // all past & future transactions from the same merchant. Confirming ("Yes, apply to all")
+  // persists the rename so future transactions carrying the SAME original string are mapped
+  // to the renamed name; declining ("No, just this one") renames only that single row.
 
-  test("editing a transaction's merchant name saves without a propagation prompt", async ({
+  test("renaming a merchant shows the rename prompt; confirming remaps future transactions", async ({
     pwaPage,
   }) => {
     const { tx1Id } = await seedTxWithUpi(pwaPage);
@@ -273,28 +273,124 @@ test.describe("MerchantNamePropagation", () => {
     await pwaPage.waitForSelector("#screen");
     await pwaPage.waitForTimeout(600);
 
-    // Open the edit modal for the transaction with a UPI ID
+    // Open the edit modal for the transaction.
     await pwaPage.evaluate((id) => {
       const item = document.querySelector(`[data-action="show-edit-tx"][data-id="${id}"]`);
       if (item) item.click();
     }, tx1Id);
     await pwaPage.waitForSelector("#edit-merchant-name", { timeout: 5000 });
 
-    // Change the merchant name to a new value and save
+    // Change the merchant name and save.
     await pwaPage.fill("#edit-merchant-name", "Swiggy Foods");
     await pwaPage.click(`[data-action="save-transaction"][data-id="${tx1Id}"]`);
+
+    // The rename prompt appears (FINCO-50). Confirm "apply to all".
+    await pwaPage.waitForSelector("#merchant-name-yes", { timeout: 5000 });
+    await pwaPage.click("#merchant-name-yes");
     await pwaPage.waitForTimeout(600);
 
-    // No propagation prompt: the "#mname-yes" dialog was removed in v4.
-    expect(await pwaPage.locator("#mname-yes").count()).toBe(0);
-    expect(await pwaPage.locator(".modal.confirm-dialog").count()).toBe(0);
-
-    // The edited transaction's displayed merchant name reflects the typed value.
-    const newName = await pwaPage.evaluate(async (id) => {
+    // The edited transaction now shows the new name.
+    const editedName = await pwaPage.evaluate(async (id) => {
       const rows = await DB.getTransactions({ id });
       return rows[0]?.merchant_name || null;
     }, tx1Id);
-    expect(newName).toBe("Swiggy Foods");
+    expect(editedName).toBe("Swiggy Foods");
+
+    // A NEW transaction carrying the ORIGINAL merchant string is auto-mapped to the new name.
+    const newTxName = await pwaPage.evaluate(async () => {
+      const acc = (await DB.getAccounts())[0];
+      const tx = await DB.createTransaction({
+        date: new Date().toISOString().slice(0, 10),
+        amount: -80,
+        description: "Another order",
+        transaction_type: "expense",
+        account_id: acc.id,
+        merchant_name: "Swiggy",
+        merchant_upi_id: "swiggy@paytm",
+      });
+      return tx.merchant_name;
+    });
+    expect(newTxName).toBe("Swiggy Foods");
+  });
+
+  test("declining the rename prompt renames only that row and leaves future transactions untouched", async ({
+    pwaPage,
+  }) => {
+    const { tx1Id } = await seedTxWithUpi(pwaPage);
+
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/transactions";
+    });
+    await pwaPage.waitForSelector("#screen");
+    await pwaPage.waitForTimeout(600);
+
+    await pwaPage.evaluate((id) => {
+      const item = document.querySelector(`[data-action="show-edit-tx"][data-id="${id}"]`);
+      if (item) item.click();
+    }, tx1Id);
+    await pwaPage.waitForSelector("#edit-merchant-name", { timeout: 5000 });
+
+    await pwaPage.fill("#edit-merchant-name", "Swiggy Foods");
+    await pwaPage.click(`[data-action="save-transaction"][data-id="${tx1Id}"]`);
+
+    // Decline the rename prompt — "No, just this one".
+    await pwaPage.waitForSelector("#merchant-name-no", { timeout: 5000 });
+    await pwaPage.click("#merchant-name-no");
+    await pwaPage.waitForTimeout(600);
+
+    // Only the edited row shows the new name.
+    const editedName = await pwaPage.evaluate(async (id) => {
+      const rows = await DB.getTransactions({ id });
+      return rows[0]?.merchant_name || null;
+    }, tx1Id);
+    expect(editedName).toBe("Swiggy Foods");
+
+    // A subsequently-added transaction with the original string keeps the ORIGINAL name.
+    const newTxName = await pwaPage.evaluate(async () => {
+      const acc = (await DB.getAccounts())[0];
+      const tx = await DB.createTransaction({
+        date: new Date().toISOString().slice(0, 10),
+        amount: -70,
+        description: "Another order",
+        transaction_type: "expense",
+        account_id: acc.id,
+        merchant_name: "Swiggy",
+        merchant_upi_id: "swiggy@paytm",
+      });
+      return tx.merchant_name;
+    });
+    expect(newTxName).toBe("Swiggy");
+  });
+
+  test("no rename prompt appears when the merchant name is unchanged", async ({ pwaPage }) => {
+    const { tx1Id } = await seedTxWithUpi(pwaPage);
+
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/transactions";
+    });
+    await pwaPage.waitForSelector("#screen");
+    await pwaPage.waitForTimeout(600);
+
+    await pwaPage.evaluate((id) => {
+      const item = document.querySelector(`[data-action="show-edit-tx"][data-id="${id}"]`);
+      if (item) item.click();
+    }, tx1Id);
+    await pwaPage.waitForSelector("#edit-merchant-name", { timeout: 5000 });
+
+    // Change only the amount, leave the merchant name as-is, then save.
+    await pwaPage.fill("#edit-amount", "175");
+    await pwaPage.click(`[data-action="save-transaction"][data-id="${tx1Id}"]`);
+    await pwaPage.waitForTimeout(600);
+
+    // No rename prompt should appear when the name did not change.
+    expect(await pwaPage.locator("#merchant-name-yes").count()).toBe(0);
+    expect(await pwaPage.locator(".modal.confirm-dialog").count()).toBe(0);
+
+    const name = await pwaPage.evaluate(async (id) => {
+      const rows = await DB.getTransactions({ id });
+      return rows[0]?.merchant_name || null;
+    }, tx1Id);
+    expect(name).toBe("Swiggy");
   });
 
   test("renaming a UPI merchant via Taxonomy reflects on its transactions", async ({
@@ -487,6 +583,11 @@ test.describe("MerchantNameLinkedEditRegression", () => {
     await pwaPage.waitForSelector("#edit-merchant-name", { timeout: 5000 });
     await pwaPage.fill("#edit-merchant-name", "Swiggy Foods");
     await pwaPage.click(`[data-action="save-transaction"][data-id="${tx1Id}"]`);
+
+    // FINCO-50: the rename prompt appears. Confirm "apply to all" so the identity
+    // rename surfaces on every linked transaction.
+    await pwaPage.waitForSelector("#merchant-name-yes", { timeout: 5000 });
+    await pwaPage.click("#merchant-name-yes");
     await pwaPage.waitForTimeout(600);
 
     // The rename surfaces on BOTH the edited transaction and its linked sibling.

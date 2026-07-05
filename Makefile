@@ -1,4 +1,8 @@
-.PHONY: help dev lint test test-unit test-e2e sync clean clean-ports deploy
+.PHONY: help dev lint test test-unit test-e2e sync clean clean-ports deploy gen-env
+
+# Source per-environment config from .env (KEY=value form), with a safe default.
+-include .env
+export GMAIL_PROXY_URL ?= https://your-worker.your-subdomain.workers.dev
 
 help:
 	@echo ""
@@ -10,6 +14,9 @@ help:
 	@echo "  make sync             - Install all dependencies"
 	@echo "  make deploy           - Deploy to Cloudflare Pages"
 	@echo ""
+	@echo "  GMAIL_PROXY_URL is read from .env (see .env.example) and baked"
+	@echo "  into static/js/env.js by 'make dev' / 'make deploy'."
+	@echo ""
 	@echo "=== Combined ==="
 	@echo "  make test             - Run all tests (unit + E2E)"
 	@echo "  make clean            - Remove caches and temp files"
@@ -17,7 +24,11 @@ help:
 
 # ─── Frontend (JS) ────────────────────────────────────────────────────────────
 
-dev:
+gen-env:
+	@printf 'window.__FINCOACH_CONFIG__ = {\n  GMAIL_PROXY_URL: "%s",\n};\n' "$(GMAIL_PROXY_URL)" > static/js/env.js
+	@echo "Generated static/js/env.js with GMAIL_PROXY_URL=$(GMAIL_PROXY_URL)"
+
+dev: gen-env
 	npx serve static -l 8111 --cors
 
 lint:
@@ -26,7 +37,7 @@ lint:
 test-unit:
 	npx vitest run
 
-deploy:
+deploy: gen-env
 	@DEPLOY_TS=$$(date -u +%Y%m%d%H%M%S) && \
 	sed -i "s/const CACHE_NAME = \"fincoach-v[^\"]*\"/const CACHE_NAME = \"fincoach-$$DEPLOY_TS\"/" static/js/sw.js && \
 	echo "Stamped CACHE_NAME: fincoach-$$DEPLOY_TS" && \
@@ -43,6 +54,7 @@ test: test-unit test-e2e
 sync:
 	npm install
 	npx playwright install chromium
+	@[ -f static/js/env.js ] || $(MAKE) gen-env
 
 clean:
 	rm -rf node_modules/.cache

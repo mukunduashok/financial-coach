@@ -58,24 +58,31 @@ export const API = {
     return DB.deleteTransaction(id);
   },
 
-  // ---- Recurring ----
-  detectRecurring(accountId = null) {
-    return DB.detectRecurring(accountId);
-  },
-  getRecurringTransactions() {
-    return DB.getRecurringTransactions();
-  },
-  getRecurringPatterns() {
-    return DB.getRecurringPatterns();
-  },
-  deleteRecurringPattern(id) {
-    return DB.deleteRecurringPattern(id);
-  },
   getUpcomingBills(days = 7) {
     return DB.getUpcomingBills(days);
   },
-  updateRecurringPattern(id, data) {
-    return DB.updateRecurringPattern(id, data);
+
+  // ---- Follow-ups / reminders ----
+  createFollowUp(transactionId, data) {
+    return DB.createFollowUp(transactionId, data);
+  },
+  updateFollowUp(id, fields) {
+    return DB.updateFollowUp(id, fields);
+  },
+  deleteFollowUp(id) {
+    return DB.deleteFollowUp(id);
+  },
+  getFollowUp(transactionId) {
+    return DB.getFollowUp(transactionId);
+  },
+  getFollowUps(filters) {
+    return DB.getFollowUps(filters);
+  },
+  markFollowUpDone(id) {
+    return DB.markFollowUpDone(id);
+  },
+  reopenFollowUp(id) {
+    return DB.reopenFollowUp(id);
   },
 
   // ---- Categories ----

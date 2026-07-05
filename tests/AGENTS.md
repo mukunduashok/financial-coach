@@ -18,6 +18,7 @@ tests/js/              # Vitest unit tests (run with: make test-unit)
   main.test.js         # Session expiry logic
   theme.test.js        # Theme persistence and toggle
   utils.test.js        # maskPII() and shared helpers
+  config.test.js       # GMAIL_PROXY_URL runtime resolution from env.js global
 
 tests/e2e/js/          # Playwright E2E tests (run with: make test-e2e)
   accounts.spec.js     # Account management flows

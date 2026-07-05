@@ -1335,6 +1335,140 @@ describe("Import Transaction — advanced", () => {
 });
 
 // ===========================================================================
+// 16b. Merchant Rename Memory across Gmail imports (FINCO-50)
+//
+// End-to-end integration across the real Gmail import path + DB. A user renames a
+// merchant on a Gmail-imported transaction and confirms (learn_merchant_name=true);
+// a subsequent Gmail email carrying the SAME original merchant string must resolve to
+// the renamed display name and link to the same merchant identity — without altering
+// the transaction category.
+// ===========================================================================
+describe("Merchant Rename Memory — Gmail import path (FINCO-50)", () => {
+  const baseEmail = {
+    transaction_type: "expense",
+    bank_name: "HDFC",
+    account_type: "savings",
+    account_last_digits: "1234",
+    email_from: "alerts@hdfcbank.net",
+    is_transaction: true,
+    is_balance_info: false,
+  };
+
+  it("second Gmail import with same original merchant picks up the renamed display name", async () => {
+    // 1. First Gmail email — raw bank merchant string, no merchant identity yet.
+    const first = await Gmail._importTransaction({
+      ...baseEmail,
+      gmail_message_id: "rename_msg_1",
+      amount: -450,
+      description: "UPI payment",
+      merchant_name: "PAYTM*SWIGGY",
+      date: "2025-03-01",
+    });
+    expect(first).toBe("imported");
+
+    const tx1 = DB._queryOne(
+      "SELECT * FROM transactions WHERE gmail_message_id = 'rename_msg_1'",
+    );
+    expect(tx1.merchant_id).toBeNull();
+    expect(tx1.merchant_name).toBe("PAYTM*SWIGGY");
+
+    // 2. User renames the merchant and confirms the "apply to all" prompt.
+    await DB.updateTransaction(tx1.id, {
+      merchant_name: "Swiggy",
+      learn_merchant_name: true,
+    });
+
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["Swiggy"]);
+    expect(merchant).not.toBeNull();
+
+    // 3. Second Gmail email carrying the SAME original raw string arrives later.
+    const second = await Gmail._importTransaction({
+      ...baseEmail,
+      gmail_message_id: "rename_msg_2",
+      amount: -520,
+      description: "UPI payment",
+      merchant_name: "PAYTM*SWIGGY",
+      date: "2025-03-10",
+    });
+    expect(second).toBe("imported");
+
+    const tx2 = DB._queryOne(
+      "SELECT * FROM transactions WHERE gmail_message_id = 'rename_msg_2'",
+    );
+    // The stored merchant_name is the RENAMED value and it links the same identity.
+    expect(tx2.merchant_name).toBe("Swiggy");
+    expect(tx2.merchant_id).toBe(merchant.id);
+  });
+
+  it("rename via Gmail-imported transaction does NOT alter its category", async () => {
+    const foodCat = DB._queryOne("SELECT id FROM categories WHERE name = ?", ["Food & Dining"]);
+
+    await Gmail._importTransaction({
+      ...baseEmail,
+      gmail_message_id: "rename_cat_1",
+      amount: -300,
+      description: "Food order",
+      merchant_name: "ZOMATO ORDER",
+      category: "Food & Dining",
+      date: "2025-03-02",
+    });
+    const tx1 = DB._queryOne(
+      "SELECT * FROM transactions WHERE gmail_message_id = 'rename_cat_1'",
+    );
+    expect(tx1.category_id).toBe(foodCat.id);
+
+    await DB.updateTransaction(tx1.id, {
+      merchant_name: "Zomato",
+      learn_merchant_name: true,
+    });
+
+    const after = DB._queryOne("SELECT category_id FROM transactions WHERE id = ?", [tx1.id]);
+    // The renamed merchant identity carries the transaction's existing category, unchanged.
+    expect(after.category_id).toBe(foodCat.id);
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["Zomato"]);
+    expect(merchant.category_id).toBe(foodCat.id);
+  });
+
+  it("declining the rename (learn_merchant_name=false) does NOT remap future Gmail imports", async () => {
+    await Gmail._importTransaction({
+      ...baseEmail,
+      gmail_message_id: "rename_decline_1",
+      amount: -75,
+      description: "Ride",
+      merchant_name: "OLA CABS RAW",
+      date: "2025-03-03",
+    });
+    const tx1 = DB._queryOne(
+      "SELECT * FROM transactions WHERE gmail_message_id = 'rename_decline_1'",
+    );
+
+    await DB.updateTransaction(tx1.id, {
+      merchant_name: "Ola",
+      learn_merchant_name: false,
+    });
+
+    // No merchant identity should have been created for the declined rename.
+    const merchant = DB._queryOne("SELECT id FROM merchants WHERE display_name = ?", ["Ola"]);
+    expect(merchant).toBeNull();
+
+    // A subsequent Gmail email with the original string keeps the raw name and no identity.
+    await Gmail._importTransaction({
+      ...baseEmail,
+      gmail_message_id: "rename_decline_2",
+      amount: -80,
+      description: "Ride",
+      merchant_name: "OLA CABS RAW",
+      date: "2025-03-11",
+    });
+    const tx2 = DB._queryOne(
+      "SELECT * FROM transactions WHERE gmail_message_id = 'rename_decline_2'",
+    );
+    expect(tx2.merchant_name).toBe("OLA CABS RAW");
+    expect(tx2.merchant_id).toBeNull();
+  });
+});
+
+// ===========================================================================
 // 17. Full extractTransactions pipeline (mocked fetch + LLM)
 // ===========================================================================
 describe("extractTransactions pipeline", () => {

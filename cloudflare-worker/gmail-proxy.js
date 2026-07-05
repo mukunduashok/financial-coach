@@ -11,7 +11,8 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const SCOPES =
 	"https://www.googleapis.com/auth/gmail.readonly " +
-	"https://www.googleapis.com/auth/drive.appdata";
+	"https://www.googleapis.com/auth/drive.appdata " +
+	"openid email";
 
 function _originAllowed(origin, allowedOrigins) {
   const patterns = allowedOrigins.split(",").map((o) => o.trim());

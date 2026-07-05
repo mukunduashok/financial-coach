@@ -2662,6 +2662,34 @@ body.light .chat-input-bar textarea {
 	padding-bottom: 4px;
 }
 
+.bill-mgmt-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-xs);
+	flex-wrap: wrap;
+	margin-left: auto;
+	padding-bottom: 4px;
+}
+
+.followup-filter-bar {
+	display: flex;
+	gap: var(--space-xs);
+	margin-bottom: var(--space-md);
+}
+
+.followup-flag {
+	display: flex;
+	align-items: center;
+	gap: var(--space-sm);
+	cursor: pointer;
+	font-weight: 500;
+}
+
+.followup-flag input {
+	width: auto;
+	margin: 0;
+}
+
 /* ==========================================================================
    Toggle Switch — pill-shaped on/off slider
    ========================================================================== */

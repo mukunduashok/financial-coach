@@ -4,6 +4,7 @@ const APP_SHELL = [
   "/css/styles.css",
   "/js/main.js",
   "/js/config.js",
+  "/js/env.js",
   "/js/db.js",
   "/js/ai.js",
   "/js/api.js",

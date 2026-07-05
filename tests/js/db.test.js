@@ -52,7 +52,7 @@ async function createDefaultTransaction(accountId, overrides = {}) {
 describe("Schema & Seed Data", () => {
   beforeEach(freshDB);
 
-  it("creates all 13 tables", () => {
+  it("creates all 14 tables", () => {
     const tables = DB._queryAll(
       "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     );
@@ -69,6 +69,7 @@ describe("Schema & Seed Data", () => {
       "recurring_patterns",
       "sync_tombstones",
       "tags",
+      "transaction_follow_ups",
       "transaction_tags",
       "transactions",
     ]);
@@ -740,6 +741,318 @@ describe("Auto-categorization & Merchant Learning", () => {
     const txs = await DB.getTransactions({});
     const updatedTx1 = txs.find((t) => t.id === tx1.id);
     expect(updatedTx1.category_id).toBe(categoryId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. Merchant Rename Memory (FINCO-50)
+// ---------------------------------------------------------------------------
+describe("Merchant Rename Memory", () => {
+  let accountId;
+  let categoryId;
+
+  beforeEach(async () => {
+    await freshDB();
+    const acc = await createDefaultAccount();
+    accountId = acc.id;
+    const cats = await DB.getCategories();
+    categoryId = cats.find((c) => c.name === "Food & Dining").id;
+  });
+
+  /** Normalize a name the same way db.js does for alias lookups. */
+  function norm(name) {
+    return name.trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  it("rename with learn=true on an UNLINKED transaction creates identity keyed on original", async () => {
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "PAYTM*SWIGGY",
+      category_id: categoryId,
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx.merchant_id).toBeNull();
+
+    const updated = await DB.updateTransaction(tx.id, {
+      merchant_name: "Swiggy",
+      learn_merchant_name: true,
+    });
+
+    // A merchants identity keyed on the ORIGINAL string now exists with the NEW display name.
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["Swiggy"]);
+    expect(merchant).not.toBeNull();
+    expect(merchant.category_id).toBe(categoryId);
+
+    // Aliases exist for both the normalized original and the normalized new name.
+    const origAlias = DB._queryOne(
+      "SELECT 1 FROM merchant_aliases WHERE merchant_id = ? AND alias_norm = ?",
+      [merchant.id, norm("PAYTM*SWIGGY")],
+    );
+    const newAlias = DB._queryOne(
+      "SELECT 1 FROM merchant_aliases WHERE merchant_id = ? AND alias_norm = ?",
+      [merchant.id, norm("Swiggy")],
+    );
+    expect(origAlias).not.toBeNull();
+    expect(newAlias).not.toBeNull();
+
+    // The transaction is now linked and shows the new name; category unchanged.
+    expect(updated.merchant_id).toBe(merchant.id);
+    expect(updated.merchant_name).toBe("Swiggy");
+    expect(updated.category_id).toBe(categoryId);
+  });
+
+  it("future transaction with SAME original merchant name picks up the new name", async () => {
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "PAYTM*SWIGGY",
+      category_id: categoryId,
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    await DB.updateTransaction(tx.id, {
+      merchant_name: "Swiggy",
+      learn_merchant_name: true,
+    });
+
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-20",
+      amount: 150,
+      merchant_name: "PAYTM*SWIGGY",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.merchant_name).toBe("Swiggy");
+    expect(tx2.merchant_id).not.toBeNull();
+  });
+
+  it("rename with learn=true on an already-LINKED transaction updates display_name and keeps original alias", async () => {
+    // Create a merchant identity and a transaction linked to it via createMerchant + auto-link.
+    await DB.createMerchant({ merchant_name: "OldName", category_id: categoryId });
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "OldName",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx.merchant_id).not.toBeNull();
+    const merchantId = tx.merchant_id;
+
+    await DB.updateTransaction(tx.id, {
+      merchant_name: "NewName",
+      learn_merchant_name: true,
+    });
+
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE id = ?", [merchantId]);
+    expect(merchant.display_name).toBe("NewName");
+
+    // The original name must still resolve to this merchant (via merchant_key or an alias).
+    const resolved = DB._lookupMerchant(null, "OldName");
+    expect(resolved).not.toBeNull();
+    expect(resolved.id).toBe(merchantId);
+
+    // A future transaction with the original name maps to the merchant and shows the new name.
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-20",
+      amount: 100,
+      merchant_name: "OldName",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.merchant_id).toBe(merchantId);
+    expect(tx2.merchant_name).toBe("NewName");
+  });
+
+  it("rename keyed on UPI only (null original name) maps future UPI-matched transactions", async () => {
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_upi_id: "coffee@upi",
+      category_id: categoryId,
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx.merchant_id).toBeNull();
+
+    await DB.updateTransaction(tx.id, {
+      merchant_name: "Coffee House",
+      learn_merchant_name: true,
+    });
+
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE merchant_upi_id = ?", [
+      "coffee@upi",
+    ]);
+    expect(merchant).not.toBeNull();
+    expect(merchant.display_name).toBe("Coffee House");
+
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-20",
+      amount: 90,
+      merchant_upi_id: "coffee@upi",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.merchant_id).toBe(merchant.id);
+    expect(tx2.merchant_name).toBe("Coffee House");
+  });
+
+  it("rename does NOT change the transaction's or siblings' category_id", async () => {
+    const foodId = categoryId;
+    const tx1 = await DB.createTransaction({
+      date: "2025-01-10",
+      amount: 100,
+      merchant_name: "RawMerchant",
+      category_id: foodId,
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-12",
+      amount: 120,
+      merchant_name: "RawMerchant",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.category_id).toBeNull();
+
+    await DB.updateTransaction(tx1.id, {
+      merchant_name: "Pretty Name",
+      learn_merchant_name: true,
+    });
+
+    const txs = await DB.getTransactions({});
+    const after1 = txs.find((t) => t.id === tx1.id);
+    const after2 = txs.find((t) => t.id === tx2.id);
+    // tx1 keeps its category; tx2 (sibling) category stays null — rename never touches category.
+    expect(after1.category_id).toBe(foodId);
+    expect(after2.category_id).toBeNull();
+  });
+
+  it("sibling retro-link: two unlinked transactions with same original merchant both show new name", async () => {
+    const tx1 = await DB.createTransaction({
+      date: "2025-01-10",
+      amount: 100,
+      merchant_name: "BIGBASKET RETAIL",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-12",
+      amount: 120,
+      merchant_name: "BIGBASKET RETAIL",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx1.merchant_id).toBeNull();
+    expect(tx2.merchant_id).toBeNull();
+
+    await DB.updateTransaction(tx1.id, {
+      merchant_name: "BigBasket",
+      learn_merchant_name: true,
+    });
+
+    const txs = await DB.getTransactions({});
+    const after1 = txs.find((t) => t.id === tx1.id);
+    const after2 = txs.find((t) => t.id === tx2.id);
+    expect(after1.merchant_id).not.toBeNull();
+    expect(after2.merchant_id).toBe(after1.merchant_id);
+    expect(after1.merchant_name).toBe("BigBasket");
+    expect(after2.merchant_name).toBe("BigBasket");
+  });
+
+  it("learn=false renames only that row and does NOT create an identity or affect future", async () => {
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "RAWSTORE",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+
+    const updated = await DB.updateTransaction(tx.id, {
+      merchant_name: "Nice Store",
+      learn_merchant_name: false,
+    });
+
+    // No merchant identity created.
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["Nice Store"]);
+    expect(merchant).toBeNull();
+    // This row's merchant_name changed but it stays unlinked.
+    expect(updated.merchant_name).toBe("Nice Store");
+    expect(updated.merchant_id).toBeNull();
+
+    // A future transaction with the original name is NOT remapped.
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-20",
+      amount: 150,
+      merchant_name: "RAWSTORE",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.merchant_name).toBe("RAWSTORE");
+    expect(tx2.merchant_id).toBeNull();
+  });
+
+  it("no-op rename (same value) creates no identity or alias", async () => {
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "SameName",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+
+    const merchantsBefore = DB._queryAll("SELECT id FROM merchants").length;
+    const aliasesBefore = DB._queryAll("SELECT id FROM merchant_aliases").length;
+
+    await DB.updateTransaction(tx.id, {
+      merchant_name: "SameName",
+      learn_merchant_name: true,
+    });
+
+    const merchantsAfter = DB._queryAll("SELECT id FROM merchants").length;
+    const aliasesAfter = DB._queryAll("SELECT id FROM merchant_aliases").length;
+    expect(merchantsAfter).toBe(merchantsBefore);
+    expect(aliasesAfter).toBe(aliasesBefore);
+  });
+
+  it("simultaneous category-learn and rename end with both new category and new display name", async () => {
+    const cats = await DB.getCategories();
+    const groceriesId = cats.find((c) => c.name === "Groceries").id;
+
+    const tx = await DB.createTransaction({
+      date: "2025-01-15",
+      amount: 200,
+      merchant_name: "DMART RETAIL",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+
+    await DB.updateTransaction(tx.id, {
+      category_id: groceriesId,
+      merchant_name: "DMart",
+      learn_merchant: true,
+      learn_merchant_name: true,
+    });
+
+    // The merchant identity should carry both the new display name and the learned category.
+    const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["DMart"]);
+    expect(merchant).not.toBeNull();
+    expect(merchant.category_id).toBe(groceriesId);
+
+    // Future transaction with the original name gets both.
+    const tx2 = await DB.createTransaction({
+      date: "2025-01-20",
+      amount: 150,
+      merchant_name: "DMART RETAIL",
+      transaction_type: "expense",
+      account_id: accountId,
+    });
+    expect(tx2.merchant_name).toBe("DMart");
+    expect(tx2.category_id).toBe(groceriesId);
   });
 });
 
@@ -1419,178 +1732,12 @@ describe("Budgets CRUD", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. Recurring Detection
-// ---------------------------------------------------------------------------
-describe("Recurring Detection", () => {
-  let accountId;
-  let categoryId;
-
-  beforeEach(async () => {
-    await freshDB();
-    const acc = await createDefaultAccount();
-    accountId = acc.id;
-    const cats = await DB.getCategories();
-    categoryId = cats[0].id;
-  });
-
-  it("detects recurring patterns from transactions", async () => {
-    // Create 3 similar monthly transactions
-    for (let month = 1; month <= 3; month++) {
-      const mm = String(month).padStart(2, "0");
-      await DB.createTransaction({
-        date: `2025-${mm}-01`,
-        amount: -500,
-        description: "Netflix Subscription",
-        transaction_type: "expense",
-        account_id: accountId,
-        category_id: categoryId,
-      });
-    }
-    const result = await DB.detectRecurring();
-    expect(result.patterns_found).toBeGreaterThanOrEqual(1);
-    expect(result.patterns.length).toBeGreaterThanOrEqual(1);
-    expect(result.transactions_flagged).toBeGreaterThan(0);
-  });
-
-  it("normalizes description for matching", () => {
-    expect(DB._normalizeDescription("  Netflix!!  Sub  ")).toBe("netflix sub");
-    expect(DB._normalizeDescription("HELLO WORLD")).toBe("hello world");
-    expect(DB._normalizeDescription(null)).toBe("");
-    expect(DB._normalizeDescription("")).toBe("");
-  });
-
-  it("matches amounts within 5% tolerance", () => {
-    expect(DB._amountsMatch(100, 104)).toBe(true); // 4% difference
-    expect(DB._amountsMatch(100, 106)).toBe(false); // 6% difference
-    expect(DB._amountsMatch(100, 100)).toBe(true);
-    expect(DB._amountsMatch(0, 0)).toBe(true);
-    expect(DB._amountsMatch(0, 1)).toBe(false);
-  });
-
-  it("finds known frequencies (weekly, monthly, etc.)", () => {
-    // Monthly intervals ~30 days
-    const monthly = DB._findFrequency([28, 31, 30, 29]);
-    expect(monthly).not.toBeNull();
-    expect(monthly.frequency).toBe(30);
-
-    // Weekly intervals ~7 days
-    const weekly = DB._findFrequency([7, 7, 8, 6]);
-    expect(weekly).not.toBeNull();
-    expect(weekly.frequency).toBe(7);
-
-    // No match for random intervals
-    const noMatch = DB._findFrequency([15, 22, 45]);
-    expect(noMatch).toBeNull();
-  });
-
-  it("respects min occurrences threshold", async () => {
-    // Only 1 transaction — should not detect pattern
-    await DB.createTransaction({
-      date: "2025-01-01",
-      amount: -100,
-      description: "Lone Transaction",
-      transaction_type: "expense",
-      account_id: accountId,
-    });
-    const result = await DB.detectRecurring();
-    expect(result.patterns_found).toBe(0);
-  });
-
-  it("retrieves recurring patterns and transactions", async () => {
-    for (let month = 1; month <= 3; month++) {
-      const mm = String(month).padStart(2, "0");
-      await DB.createTransaction({
-        date: `2025-${mm}-01`,
-        amount: -500,
-        description: "Gym Membership",
-        transaction_type: "expense",
-        account_id: accountId,
-        category_id: categoryId,
-      });
-    }
-    await DB.detectRecurring();
-
-    const patterns = await DB.getRecurringPatterns();
-    expect(patterns.length).toBeGreaterThanOrEqual(1);
-    expect(patterns[0]).toHaveProperty("description_pattern");
-    expect(patterns[0]).toHaveProperty("frequency_days");
-
-    const recTxs = await DB.getRecurringTransactions();
-    expect(recTxs.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("deletes a recurring pattern", async () => {
-    for (let month = 1; month <= 3; month++) {
-      const mm = String(month).padStart(2, "0");
-      await DB.createTransaction({
-        date: `2025-${mm}-01`,
-        amount: -500,
-        description: "Delete Me Pattern",
-        transaction_type: "expense",
-        account_id: accountId,
-      });
-    }
-    await DB.detectRecurring();
-    const patterns = await DB.getRecurringPatterns();
-    const result = await DB.deleteRecurringPattern(patterns[0].id);
-    expect(result.detail).toBe("Pattern deleted");
-  });
-
-  it("throws when deleting nonexistent pattern", async () => {
-    await expect(DB.deleteRecurringPattern(9999)).rejects.toThrow("Recurring pattern not found");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // 10b. Bill Reminders
 // ---------------------------------------------------------------------------
 
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function daysFromNow(n) {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-/** Insert a recurring pattern directly via SQL. Returns the inserted row id. */
-function insertPattern(accountId, overrides = {}) {
-  const now = new Date().toISOString().replace("T", " ").replace("Z", "");
-  const defaults = {
-    description_pattern: "Test Subscription",
-    amount: 499,
-    frequency_days: 30,
-    last_seen: "2026-04-01",
-    confidence: 0.9,
-    next_due_date: daysFromNow(3),
-    reminder_days_before: 3,
-    is_reminder_enabled: 1,
-    created_at: now,
-  };
-  const p = { ...defaults, ...overrides };
-  DB._exec(
-    `INSERT INTO recurring_patterns
-      (description_pattern, amount, frequency_days, last_seen, confidence, is_active,
-       account_id, next_due_date, reminder_days_before, is_reminder_enabled, created_at)
-     VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
-    [
-      p.description_pattern,
-      p.amount,
-      p.frequency_days,
-      p.last_seen,
-      p.confidence,
-      accountId,
-      p.next_due_date,
-      p.reminder_days_before,
-      p.is_reminder_enabled,
-      p.created_at,
-    ],
-  );
-  return DB._queryOne(
-    "SELECT id FROM recurring_patterns ORDER BY id DESC LIMIT 1",
-  ).id;
 }
 
 describe("Bill Reminders", () => {
@@ -1607,88 +1754,6 @@ describe("Bill Reminders", () => {
     expect(cols).toContain("next_due_date");
     expect(cols).toContain("reminder_days_before");
     expect(cols).toContain("is_reminder_enabled");
-  });
-
-  it("detectRecurring() sets next_due_date on new pattern", async () => {
-    const acc = await createDefaultAccount();
-    const cats = await DB.getCategories();
-    const catId = cats[0].id;
-    for (let month = 1; month <= 3; month++) {
-      const mm = String(month).padStart(2, "0");
-      await DB.createTransaction({
-        date: `2026-${mm}-01`,
-        amount: -499,
-        description: "Netflix Subscription",
-        transaction_type: "expense",
-        account_id: acc.id,
-        category_id: catId,
-      });
-    }
-    await DB.detectRecurring();
-    const patterns = await DB.getRecurringPatterns();
-    expect(patterns.length).toBeGreaterThanOrEqual(1);
-    expect(patterns[0].next_due_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
-
-  it("getUpcomingBills(7) returns bills within window", async () => {
-    insertPattern(acctId, { next_due_date: daysFromNow(3), is_reminder_enabled: 1 });
-    const bills = await DB.getUpcomingBills(7);
-    expect(bills).toHaveLength(1);
-    expect(bills[0].days_remaining).toBe(3);
-  });
-
-  it("getUpcomingBills(7) excludes bills beyond window", async () => {
-    insertPattern(acctId, { next_due_date: daysFromNow(10), is_reminder_enabled: 1 });
-    const bills = await DB.getUpcomingBills(7);
-    expect(bills).toHaveLength(0);
-  });
-
-  it("getUpcomingBills() includes overdue bills (days_remaining negative)", async () => {
-    insertPattern(acctId, { next_due_date: daysFromNow(-1), is_reminder_enabled: 1 });
-    const bills = await DB.getUpcomingBills(7);
-    expect(bills).toHaveLength(1);
-    expect(bills[0].days_remaining).toBe(-1);
-  });
-
-  it("getUpcomingBills() excludes disabled reminders", async () => {
-    insertPattern(acctId, { next_due_date: daysFromNow(3), is_reminder_enabled: 0 });
-    const bills = await DB.getUpcomingBills(7);
-    expect(bills).toHaveLength(0);
-  });
-
-  it("updateRecurringPattern() updates next_due_date", async () => {
-    const id = insertPattern(acctId, { next_due_date: daysFromNow(3) });
-    await DB.updateRecurringPattern(id, { next_due_date: "2026-12-01" });
-    const row = DB._queryOne("SELECT next_due_date FROM recurring_patterns WHERE id = ?", [id]);
-    expect(row.next_due_date).toBe("2026-12-01");
-  });
-
-  it("updateRecurringPattern() updates reminder_days_before", async () => {
-    const id = insertPattern(acctId, {});
-    await DB.updateRecurringPattern(id, { reminder_days_before: 7 });
-    const row = DB._queryOne(
-      "SELECT reminder_days_before FROM recurring_patterns WHERE id = ?",
-      [id],
-    );
-    expect(row.reminder_days_before).toBe(7);
-  });
-
-  it("updateRecurringPattern() toggles is_reminder_enabled off", async () => {
-    const id = insertPattern(acctId, { next_due_date: daysFromNow(3), is_reminder_enabled: 1 });
-    await DB.updateRecurringPattern(id, { is_reminder_enabled: false });
-    const bills = await DB.getUpcomingBills(7);
-    expect(bills.filter((b) => b.id === id)).toHaveLength(0);
-  });
-
-  it("updateRecurringPattern() throws for unknown id", async () => {
-    await expect(
-      DB.updateRecurringPattern(9999, { next_due_date: "2026-12-01" }),
-    ).rejects.toThrow("not found");
-  });
-
-  it("updateRecurringPattern() throws with no fields", async () => {
-    const id = insertPattern(acctId, {});
-    await expect(DB.updateRecurringPattern(id, {})).rejects.toThrow("No fields");
   });
 });
 
@@ -2310,20 +2375,6 @@ describe("Edge Cases", () => {
     const oldDefault = allCats.find((c) => c.id === cats[0].id);
     expect(oldDefault.is_default).toBe(false);
   });
-
-  it("_findFrequency returns null for empty intervals", () => {
-    expect(DB._findFrequency([])).toBeNull();
-    expect(DB._findFrequency(null)).toBeNull();
-  });
-
-  it("_groupTransactions skips entries without description", () => {
-    const groups = DB._groupTransactions([
-      { description: null, amount: 100 },
-      { description: "", amount: 100 },
-      { description: "valid", amount: 100 },
-    ]);
-    expect(Object.keys(groups).length).toBe(1);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2668,6 +2719,274 @@ describe("deleteAccount — transaction check", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Transaction Follow-ups
+// ---------------------------------------------------------------------------
+describe("Transaction Follow-ups", () => {
+	beforeEach(freshDB);
+
+	// UTC-based ISO date offset from today (mirrors db.js _todayISO/_addDays UTC semantics).
+	const isoOffset = (days) =>
+		new Date(Date.now() + days * 86_400_000).toISOString().split("T")[0];
+
+	async function seedTransaction(overrides = {}) {
+		const acc = await createDefaultAccount({ account_identifier: "FU-ACC" });
+		return createDefaultTransaction(acc.id, { transaction_id: "FU-TX-1", ...overrides });
+	}
+
+	it("createFollowUp is retrievable by transaction id and by its own id", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, {
+			title: "Chase refund",
+			follow_up_type: "dispute",
+			due_date: "2025-02-01",
+			notes: "Amazon return",
+		});
+		expect(created.id).toBeTruthy();
+		expect(created.status).toBe("pending");
+		expect(created.transaction_id).toBe(tx.id);
+
+		const byTx = await DB.getFollowUp(tx.id);
+		expect(byTx).not.toBeNull();
+		expect(byTx.title).toBe("Chase refund");
+		expect(byTx.follow_up_type).toBe("dispute");
+		expect(byTx.due_date).toBe("2025-02-01");
+		expect(byTx.notes).toBe("Amazon return");
+
+		const byId = await DB.getFollowUpById(created.id);
+		expect(byId.id).toBe(created.id);
+		expect(byId.title).toBe("Chase refund");
+	});
+
+	it("updateFollowUp changes fields and bumps updated_at", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, { title: "Original", due_date: "2025-02-01" });
+		const updated = await DB.updateFollowUp(created.id, {
+			title: "Renamed",
+			due_date: "2025-03-01",
+			notes: "changed",
+		});
+		expect(updated.title).toBe("Renamed");
+		expect(updated.due_date).toBe("2025-03-01");
+		expect(updated.notes).toBe("changed");
+		expect(updated.updated_at >= created.updated_at).toBe(true);
+	});
+
+	it("deleteFollowUp removes the row and records a follow_up tombstone", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, { title: "To delete" });
+		await DB.deleteFollowUp(created.id);
+
+		expect(await DB.getFollowUp(tx.id)).toBeNull();
+
+		const tombstones = DB._queryAll(
+			"SELECT * FROM sync_tombstones WHERE entity_type = 'follow_up'",
+		);
+		expect(tombstones).toHaveLength(1);
+		expect(tombstones[0].entity_key).toBe(tx.transaction_id);
+	});
+
+	it("markFollowUpDone on a non-recurring item sets status done and completed_at", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, {
+			title: "One-off",
+			due_date: "2025-02-01",
+			is_recurring: false,
+		});
+		const done = await DB.markFollowUpDone(created.id);
+		expect(done.status).toBe("done");
+		expect(done.completed_at).toBeTruthy();
+	});
+
+	it("markFollowUpDone on a recurring monthly item stays pending and rolls due_date forward", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, {
+			title: "Monthly bill",
+			due_date: "2025-02-15",
+			is_recurring: true,
+			recurrence: "monthly",
+		});
+		const rolled = await DB.markFollowUpDone(created.id);
+		expect(rolled.status).toBe("pending");
+		expect(rolled.completed_at).toBeTruthy();
+		expect(rolled.due_date > created.due_date).toBe(true);
+	});
+
+	it.each([
+		["weekly", "2025-02-15", "2025-02-22"],
+		["quarterly", "2025-02-15", "2025-05-15"],
+		["yearly", "2025-02-15", "2026-02-15"],
+	])(
+		"markFollowUpDone rolls a %s recurring item forward correctly",
+		async (recurrence, dueDate, expectedNext) => {
+			const tx = await seedTransaction();
+			const created = await DB.createFollowUp(tx.id, {
+				title: `${recurrence} bill`,
+				due_date: dueDate,
+				is_recurring: true,
+				recurrence,
+			});
+			const rolled = await DB.markFollowUpDone(created.id);
+			expect(rolled.status).toBe("pending");
+			expect(rolled.due_date).toBe(expectedNext);
+			expect(rolled.completed_at).toBeTruthy();
+		},
+	);
+
+	it("markFollowUpDone on a recurring item with no due_date rolls forward from today", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, {
+			title: "No due date monthly",
+			is_recurring: true,
+			recurrence: "monthly",
+		});
+		expect(created.due_date).toBeNull();
+		const rolled = await DB.markFollowUpDone(created.id);
+		expect(rolled.status).toBe("pending");
+		expect(rolled.due_date).not.toBeNull();
+		// Rolled from today → roughly a month out (25–40 days ahead of today).
+		expect(rolled.days_remaining).toBeGreaterThanOrEqual(25);
+		expect(rolled.days_remaining).toBeLessThanOrEqual(40);
+	});
+
+	it("reopenFollowUp resets status to pending and clears completed_at", async () => {
+		const tx = await seedTransaction();
+		const created = await DB.createFollowUp(tx.id, { title: "Reopen me", is_recurring: false });
+		await DB.markFollowUpDone(created.id);
+		const reopened = await DB.reopenFollowUp(created.id);
+		expect(reopened.status).toBe("pending");
+		expect(reopened.completed_at).toBeNull();
+	});
+
+	it("getFollowUps filters by status and type, and lists pending before done", async () => {
+		const acc = await createDefaultAccount({ account_identifier: "FU-LIST-ACC" });
+		const txA = await createDefaultTransaction(acc.id, { transaction_id: "FU-LIST-A" });
+		const txB = await createDefaultTransaction(acc.id, { transaction_id: "FU-LIST-B" });
+		const txC = await createDefaultTransaction(acc.id, { transaction_id: "FU-LIST-C" });
+
+		await DB.createFollowUp(txA.id, {
+			title: "Pending reminder",
+			follow_up_type: "reminder",
+			due_date: isoOffset(2),
+		});
+		await DB.createFollowUp(txB.id, {
+			title: "Pending dispute",
+			follow_up_type: "dispute",
+			due_date: isoOffset(5),
+		});
+		const doneOne = await DB.createFollowUp(txC.id, {
+			title: "Completed reminder",
+			follow_up_type: "reminder",
+			due_date: isoOffset(1),
+			is_recurring: false,
+		});
+		await DB.markFollowUpDone(doneOne.id);
+
+		const pending = await DB.getFollowUps({ status: "pending" });
+		expect(pending).toHaveLength(2);
+		expect(pending.every((f) => f.status === "pending")).toBe(true);
+
+		const disputes = await DB.getFollowUps({ follow_up_type: "dispute" });
+		expect(disputes).toHaveLength(1);
+		expect(disputes[0].title).toBe("Pending dispute");
+
+		const all = await DB.getFollowUps();
+		expect(all).toHaveLength(3);
+		// Pending items come before done items.
+		expect(all[0].status).toBe("pending");
+		expect(all[all.length - 1].status).toBe("done");
+	});
+
+	it("getFollowUps orders pending by days_remaining ascending with undated last", async () => {
+		const acc = await createDefaultAccount({ account_identifier: "FU-ORDER-ACC" });
+		const txOverdue = await createDefaultTransaction(acc.id, { transaction_id: "FU-ORD-OVERDUE" });
+		const txSoon = await createDefaultTransaction(acc.id, { transaction_id: "FU-ORD-SOON" });
+		const txLater = await createDefaultTransaction(acc.id, { transaction_id: "FU-ORD-LATER" });
+		const txUndated = await createDefaultTransaction(acc.id, { transaction_id: "FU-ORD-UNDATED" });
+
+		await DB.createFollowUp(txSoon.id, { title: "Soon", due_date: isoOffset(2) });
+		await DB.createFollowUp(txUndated.id, { title: "Undated" });
+		await DB.createFollowUp(txOverdue.id, { title: "Overdue", due_date: isoOffset(-5) });
+		await DB.createFollowUp(txLater.id, { title: "Later", due_date: isoOffset(20) });
+
+		const ordered = (await DB.getFollowUps({ status: "pending" })).map((f) => f.title);
+		expect(ordered).toEqual(["Overdue", "Soon", "Later", "Undated"]);
+	});
+
+	it("getUpcomingBills includes follow-ups due within the window and excludes those outside", async () => {
+		const acc = await createDefaultAccount({ account_identifier: "FU-BILL-ACC" });
+		const txSoon = await createDefaultTransaction(acc.id, { transaction_id: "FU-BILL-SOON" });
+		const txLater = await createDefaultTransaction(acc.id, { transaction_id: "FU-BILL-LATER" });
+
+		await DB.createFollowUp(txSoon.id, {
+			title: "Due soon",
+			follow_up_type: "bill",
+			due_date: isoOffset(3),
+		});
+		await DB.createFollowUp(txLater.id, {
+			title: "Due later",
+			follow_up_type: "bill",
+			due_date: isoOffset(30),
+		});
+
+		const upcoming = await DB.getUpcomingBills(7);
+		const titles = upcoming.map((b) => b.title);
+		expect(titles).toContain("Due soon");
+		expect(titles).not.toContain("Due later");
+		expect(upcoming.every((b) => typeof b.days_remaining === "number")).toBe(true);
+	});
+
+	it("mergeFromJSON respects a follow_up tombstone and applies last-writer-wins to another", async () => {
+		const acc = await createDefaultAccount({ account_identifier: "FU-SYNC-ACC" });
+		const txA = await createDefaultTransaction(acc.id, {
+			transaction_id: "FU-SYNC-A",
+			description: "Sync TX A",
+		});
+		const txB = await createDefaultTransaction(acc.id, {
+			transaction_id: "FU-SYNC-B",
+			description: "Sync TX B",
+		});
+		const fuA = await DB.createFollowUp(txA.id, {
+			title: "Follow A",
+			follow_up_type: "reminder",
+			due_date: "2025-02-01",
+		});
+		await DB.createFollowUp(txB.id, {
+			title: "Follow B",
+			follow_up_type: "reminder",
+			due_date: "2025-03-01",
+		});
+
+		const envelope = await DB.exportAsJSON();
+
+		// Age the exported follow-up A so the local delete tombstone wins, and bump follow-up B
+		// to a future updated_at so the remote row wins under last-writer-wins.
+		for (const row of envelope.tables.transaction_follow_ups) {
+			if (row.transaction_id === txA.id) {
+				row.updated_at = "2020-01-01 00:00:00";
+			}
+			if (row.transaction_id === txB.id) {
+				row.title = "Follow B (remote win)";
+				row.updated_at = "2099-01-01 00:00:00";
+			}
+		}
+
+		// Delete follow-up A locally → records a follow_up tombstone newer than the export row.
+		await DB.deleteFollowUp(fuA.id);
+		expect(await DB.getFollowUp(txA.id)).toBeNull();
+
+		await DB.mergeFromJSON(envelope);
+
+		// Tombstone-based deletion is respected: follow-up A is not resurrected.
+		expect(await DB.getFollowUp(txA.id)).toBeNull();
+
+		// Follow-up B is updated by the newer remote row (last-writer-wins).
+		const mergedB = await DB.getFollowUp(txB.id);
+		expect(mergedB).not.toBeNull();
+		expect(mergedB.title).toBe("Follow B (remote win)");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // exportAsJSON / mergeFromJSON
 // ---------------------------------------------------------------------------
 describe("exportAsJSON / mergeFromJSON", () => {
@@ -2700,6 +3019,7 @@ describe("exportAsJSON / mergeFromJSON", () => {
 			"recurring_patterns",
 			"sync_tombstones",
 			"tags",
+			"transaction_follow_ups",
 			"transaction_tags",
 			"transactions",
 		]);

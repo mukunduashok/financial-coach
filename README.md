@@ -95,11 +95,15 @@ Note the deployed Worker URL — you will need it in the next step.
 
 ### 3. Point the app at your Worker
 
-Open `static/js/config.js` and set `GMAIL_PROXY_URL` to your deployed Worker URL:
+Copy `.env.example` to `.env` and set `GMAIL_PROXY_URL` to your deployed Worker URL:
 
-```js
-export const GMAIL_PROXY_URL = "https://<your-worker>.<your-subdomain>.workers.dev";
+```bash
+cp .env.example .env
+# then edit .env:
+# GMAIL_PROXY_URL=https://<your-worker>.<your-subdomain>.workers.dev
 ```
+
+`make dev` and `make deploy` read this value and generate `static/js/env.js` automatically.
 
 ### 4. Deploy the app
 

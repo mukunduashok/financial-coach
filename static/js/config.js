@@ -6,9 +6,12 @@
  */
 
 /** Cloudflare Worker URL that handles Gmail OAuth token exchange. */
-// Set this to your own deployed Cloudflare Worker URL.
+// Resolved at load from window.__FINCOACH_CONFIG__ (generated static/js/env.js from .env
+// via `make gen-env` / `make dev` / `make deploy`); falls back to the placeholder below.
 // See cloudflare-worker/ and docs/cloudflare-deployment.md for deployment steps.
-export const GMAIL_PROXY_URL = "https://your-worker.your-subdomain.workers.dev";
+export const GMAIL_PROXY_URL =
+  globalThis.__FINCOACH_CONFIG__?.GMAIL_PROXY_URL ??
+  "https://your-worker.your-subdomain.workers.dev";
 
 /**
  * Minimum time (ms) between automatic Drive syncs.

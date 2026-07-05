@@ -192,6 +192,20 @@ describe("handleAuthUrl (via /auth/url endpoint)", () => {
     expect(data.auth_url).toContain("https://accounts.google.com/o/oauth2/v2/auth");
   });
 
+  it("auth_url scope includes gmail.readonly, drive.appdata, openid, and email", async () => {
+    const req = makeRequest("/auth/url", { origin: "http://localhost:8080" });
+    const resp = await workerModule.fetch(req, mockEnv);
+    const data = await resp.json();
+
+    const authUrl = new URL(data.auth_url);
+    const scope = authUrl.searchParams.get("scope");
+    expect(scope).toContain("https://www.googleapis.com/auth/gmail.readonly");
+    expect(scope).toContain("https://www.googleapis.com/auth/drive.appdata");
+    // openid + email are required so /oauth2/v3/userinfo returns the user's sub
+    expect(scope.split(" ")).toContain("openid");
+    expect(scope.split(" ")).toContain("email");
+  });
+
   it("404 for unknown endpoint", async () => {
     const req = makeRequest("/unknown");
     const resp = await workerModule.fetch(req, mockEnv);

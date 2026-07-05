@@ -135,13 +135,16 @@ npx wrangler deploy
 
 #### 3. Verify the PWA config
 
-Ensure `static/js/config.js` points to your Worker URL:
+Copy `.env.example` to `.env` and set `GMAIL_PROXY_URL` to your Worker URL:
 
-```javascript
-export const GMAIL_PROXY_URL = "https://<your-worker-name>.<your-account>.workers.dev";
+```bash
+cp .env.example .env
+# GMAIL_PROXY_URL=https://<your-worker-name>.<your-account>.workers.dev
 ```
 
-If you change the Worker name or account, update this URL and redeploy Pages.
+`make dev` and `make deploy` read this value and generate `static/js/env.js`
+(loaded before `main.js`). If you change the Worker name or account, update
+`.env` and redeploy Pages.
 
 ### Deploy
 

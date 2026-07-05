@@ -48,7 +48,6 @@ vi.mock("../../static/js/db.js", () => ({
     getChatHistory: vi.fn().mockResolvedValue({ chat_id: null, history: [] }),
     exportDatabase: vi.fn().mockReturnValue(new Uint8Array()),
     exportTransactionsCSV: vi.fn().mockReturnValue(""),
-    getRecurringTransactions: vi.fn().mockResolvedValue([]),
     getSettings: vi.fn().mockReturnValue({}),
   },
 }));
@@ -67,8 +66,8 @@ const mockAPI = {
   getGmailStatus: vi.fn().mockResolvedValue({ connected: false, email: null }),
   getGmailConnectUrl: vi.fn().mockResolvedValue({ auth_url: "https://accounts.google.com/o/oauth2/auth" }),
   getUpcomingBills: vi.fn().mockResolvedValue([]),
-  getRecurringPatterns: vi.fn().mockResolvedValue([]),
-  updateRecurringPattern: vi.fn().mockResolvedValue({ detail: "Pattern updated" }),
+  getFollowUp: vi.fn().mockResolvedValue(null),
+  getFollowUps: vi.fn().mockResolvedValue([]),
   getGmailCustomSenders: vi.fn().mockReturnValue([]),
   saveGmailCustomSenders: vi.fn(),
   getTags: vi.fn().mockResolvedValue([]),
@@ -117,8 +116,6 @@ beforeAll(async () => {
 // in some beforeEach/afterEach blocks don't leave them returning undefined.
 beforeEach(() => {
   mockAPI.getUpcomingBills.mockResolvedValue([]);
-  mockAPI.getRecurringPatterns.mockResolvedValue([]);
-  mockAPI.updateRecurringPattern.mockResolvedValue({ detail: "Pattern updated" });
 });
 
 // ---------------------------------------------------------------------------

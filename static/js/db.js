@@ -24,10 +24,6 @@ import {
 // ---------------------------------------------------------------------------
 // Constants (from app/constants.py)
 // ---------------------------------------------------------------------------
-const RECURRING_MIN_OCCURRENCES = 2;
-const RECURRING_AMOUNT_TOLERANCE = 0.05;
-const RECURRING_FREQUENCY_TOLERANCE_DAYS = 5;
-const RECURRING_KNOWN_FREQUENCIES = [7, 14, 30, 90, 365];
 const MAX_MERGE_DEPTH = 5;
 const BUDGET_WARNING_THRESHOLD = 0.8;
 const DEFAULT_REPORT_MONTHS = 6;
@@ -229,6 +225,23 @@ CREATE TABLE IF NOT EXISTS transaction_tags (
 );
 CREATE INDEX IF NOT EXISTS ix_transaction_tags_tag_id ON transaction_tags(tag_id);
 
+CREATE TABLE IF NOT EXISTS transaction_follow_ups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  title TEXT,
+  follow_up_type TEXT NOT NULL DEFAULT 'reminder',
+  due_date TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  is_recurring INTEGER NOT NULL DEFAULT 0,
+  recurrence TEXT,
+  completed_at TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(transaction_id)
+);
+CREATE INDEX IF NOT EXISTS ix_follow_ups_status_due ON transaction_follow_ups(status, due_date);
+
 CREATE TABLE IF NOT EXISTS sync_tombstones (
   entity_type TEXT NOT NULL,
   entity_key TEXT NOT NULL,
@@ -252,6 +265,7 @@ const SYNC_TABLES = [
   "processed_gmail_messages",
   "tags",
   "transaction_tags",
+  "transaction_follow_ups",
   "sync_tombstones",
 ];
 
@@ -528,6 +542,35 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    // Transaction follow-ups / reminders: any transaction can be flagged for follow-up.
+    // Adds the transaction_follow_ups table (1:1 with a transaction) and its status/due
+    // index. Idempotent — CREATE IF NOT EXISTS is a no-op on a fresh DB already built
+    // from SCHEMA_SQL.
+    version: 8,
+    up(db) {
+      db._exec(`
+        CREATE TABLE IF NOT EXISTS transaction_follow_ups (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          title TEXT,
+          follow_up_type TEXT NOT NULL DEFAULT 'reminder',
+          due_date TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          is_recurring INTEGER NOT NULL DEFAULT 0,
+          recurrence TEXT,
+          completed_at TEXT,
+          notes TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(transaction_id)
+        )
+      `);
+      db._exec(
+        "CREATE INDEX IF NOT EXISTS ix_follow_ups_status_due ON transaction_follow_ups(status, due_date)",
+      );
+    },
+  },
 ];
 
 export const LATEST_USER_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
@@ -575,9 +618,41 @@ function _addDays(dateStr, days) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Roll a date forward by a follow-up recurrence interval. Unknown/absent values fall
+// back to monthly. Returns a YYYY-MM-DD string.
+function _advanceByRecurrence(dateStr, recurrence) {
+  const d = new Date(dateStr);
+  switch (recurrence) {
+    case "weekly":
+      d.setDate(d.getDate() + 7);
+      break;
+    case "quarterly":
+      d.setMonth(d.getMonth() + 3);
+      break;
+    case "yearly":
+      d.setFullYear(d.getFullYear() + 1);
+      break;
+    default:
+      d.setMonth(d.getMonth() + 1);
+      break;
+  }
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function _daysBetween(fromDate, toDate) {
   return Math.round((new Date(toDate) - new Date(fromDate)) / 86_400_000);
 }
+
+// Shared SELECT for follow-ups joined to their parent transaction and category so a row
+// carries the transaction's amount/merchant/type context alongside the follow-up fields.
+const FOLLOWUP_SELECT = `
+  SELECT f.*, t.amount AS amount, t.description AS description,
+    t.merchant_name AS merchant_name, t.merchant_upi_id AS merchant_upi_id,
+    t.transaction_type AS transaction_type, t.account_id AS account_id,
+    t.date AS transaction_date, c.name AS category_name
+  FROM transaction_follow_ups f
+  LEFT JOIN transactions t ON t.id = f.transaction_id
+  LEFT JOIN categories c ON c.id = t.category_id`;
 
 function _getOrCreateDeviceId() {
   const KEY = "fincoach-device-id";
@@ -1332,29 +1407,50 @@ export const DB = {
       transaction.id,
     ]);
 
-    // Retroactively apply the chosen category to every transaction belonging to THIS
-    // merchant — those already linked by merchant_id, plus any unlinked rows whose
-    // provenance (merchant_upi_id, or normalized merchant_name) resolves to this
-    // merchant via its UPI id / key / aliases. Scoped strictly to this merchant.
+    // Retroactively link + recategorize every transaction belonging to THIS merchant.
+    this._relinkMerchantTransactions(merchant, {
+      upiId: merchantUpiId,
+      originalName: merchantName,
+      excludeTxId: transaction.id,
+      categoryId: newCategoryId,
+    });
+  },
+
+  /**
+   * Retroactively link every transaction belonging to `merchant` — those already linked by
+   * merchant_id, plus any unlinked rows whose provenance (merchant_upi_id, or normalized
+   * merchant_name) resolves to this merchant via its UPI id / key / aliases. Scoped strictly
+   * to this merchant. When `categoryId` is provided the chosen category is applied too;
+   * otherwise only merchant_id is set (used by rename memory, which must not touch category).
+   */
+  _relinkMerchantTransactions(merchant, { upiId, originalName, excludeTxId, categoryId } = {}) {
+    const setCategory = categoryId !== undefined && categoryId !== null;
+    const setClause = setCategory ? "category_id = ?, merchant_id = ?" : "merchant_id = ?";
+    const catArgs = setCategory ? [categoryId] : [];
+
     const aliasNorms = this._queryAll(
       "SELECT alias_norm FROM merchant_aliases WHERE merchant_id = ?",
       [merchant.id],
     ).map((r) => r.alias_norm);
     const nameKeys = new Set(aliasNorms);
     if (merchant.merchant_key) nameKeys.add(merchant.merchant_key);
-    const normSelf = _normalizeMerchantName(merchantName);
+    const normSelf = _normalizeMerchantName(originalName);
     if (normSelf) nameKeys.add(normSelf);
 
     // Always sweep rows already linked to this merchant.
-    this._exec(
-      "UPDATE transactions SET category_id = ?, merchant_id = ? WHERE id != ? AND merchant_id = ?",
-      [newCategoryId, merchant.id, transaction.id, merchant.id],
-    );
-    if (merchantUpiId) {
-      this._exec(
-        "UPDATE transactions SET category_id = ?, merchant_id = ? WHERE id != ? AND merchant_upi_id = ?",
-        [newCategoryId, merchant.id, transaction.id, merchantUpiId],
-      );
+    this._exec(`UPDATE transactions SET ${setClause} WHERE id != ? AND merchant_id = ?`, [
+      ...catArgs,
+      merchant.id,
+      excludeTxId,
+      merchant.id,
+    ]);
+    if (upiId) {
+      this._exec(`UPDATE transactions SET ${setClause} WHERE id != ? AND merchant_upi_id = ?`, [
+        ...catArgs,
+        merchant.id,
+        excludeTxId,
+        upiId,
+      ]);
     }
     if (nameKeys.size > 0) {
       // Match on the SAME normalization used to build nameKeys (_normalizeMerchantName
@@ -1364,17 +1460,75 @@ export const DB = {
         `SELECT id, merchant_name FROM transactions
          WHERE id != ? AND merchant_id IS NULL AND merchant_upi_id IS NULL
            AND merchant_name IS NOT NULL`,
-        [transaction.id],
+        [excludeTxId],
       );
       for (const cand of candidates) {
         if (!nameKeys.has(_normalizeMerchantName(cand.merchant_name))) continue;
-        this._exec("UPDATE transactions SET category_id = ?, merchant_id = ? WHERE id = ?", [
-          newCategoryId,
+        this._exec(`UPDATE transactions SET ${setClause} WHERE id = ?`, [
+          ...catArgs,
           merchant.id,
           cand.id,
         ]);
       }
     }
+  },
+
+  /**
+   * Persist a merchant rename so future transactions carrying the SAME original merchant
+   * provenance are automatically mapped to the renamed display name. Keyed on the ORIGINAL
+   * string/UPI (that is what future bank/LLM emails carry). Never changes category_id.
+   */
+  _rememberMerchantRename(transaction, originalUpiId, originalName, newName) {
+    if (!originalUpiId && !originalName) return;
+
+    let merchant = this._lookupMerchant(originalUpiId, originalName);
+    const now = _now();
+
+    if (merchant) {
+      if (merchant.display_name !== newName) {
+        this._exec("UPDATE merchants SET display_name = ?, last_updated = ? WHERE id = ?", [
+          newName,
+          now,
+          merchant.id,
+        ]);
+      }
+      // Ensure the original raw name resolves to this merchant (it may have matched by UPI).
+      this._ensureMerchantAlias(merchant.id, merchant.merchant_key, originalName);
+    } else {
+      // The bug case: no identity yet. Create one keyed on the ORIGINAL string so future
+      // imports of that raw text resolve here.
+      const key = this._uniqueMerchantKey(originalUpiId, originalName);
+      this._exec(
+        "INSERT INTO merchants (merchant_key, display_name, merchant_upi_id, category_id, confidence_score, created_at, last_updated) VALUES (?,?,?,?,?,?,?)",
+        [
+          key,
+          newName,
+          originalUpiId || null,
+          transaction.category_id || null,
+          DEFAULT_CONFIDENCE_SCORE,
+          now,
+          now,
+        ],
+      );
+      merchant = { id: this._lastInsertId(), merchant_key: key };
+      this._ensureMerchantAlias(merchant.id, key, originalName);
+    }
+
+    // Also map the NEW name so a future manual entry typed as the new name maps here too.
+    this._ensureMerchantAlias(merchant.id, merchant.merchant_key, newName);
+
+    // Link this transaction to the merchant identity.
+    this._exec("UPDATE transactions SET merchant_id = ? WHERE id = ?", [
+      merchant.id,
+      transaction.id,
+    ]);
+
+    // Retro-link siblings (no category write) so they display the new name automatically.
+    this._relinkMerchantTransactions(merchant, {
+      upiId: originalUpiId,
+      originalName,
+      excludeTxId: transaction.id,
+    });
   },
 
   _buildTransactionResponse(tx) {
@@ -1689,7 +1843,24 @@ export const DB = {
     // _buildTransactionResponse), so editing the merchant name on such a transaction must
     // rename the merchant identity for the change to surface. Unlinked transactions rely on
     // their own merchant_name column (updated above) instead.
-    if (data.merchant_name !== undefined && data.merchant_name && tx.merchant_id) {
+    const nameChanged =
+      data.merchant_name !== undefined &&
+      data.merchant_name &&
+      data.merchant_name !== tx.merchant_name;
+
+    if (nameChanged && data.learn_merchant_name === true) {
+      // Remember the rename so future transactions with the SAME original provenance map to
+      // the new name. Works for both linked and unlinked source transactions. Keyed on the
+      // ORIGINAL name/UPI from the pre-update snapshot. Carries the transaction's CURRENT
+      // (post-update) category without changing it.
+      const updated = this._queryOne("SELECT * FROM transactions WHERE id = ?", [txId]);
+      this._rememberMerchantRename(
+        updated,
+        tx.merchant_upi_id,
+        tx.merchant_name,
+        data.merchant_name,
+      );
+    } else if (data.merchant_name !== undefined && data.merchant_name && tx.merchant_id) {
       const linked = this._queryOne("SELECT display_name FROM merchants WHERE id = ?", [
         tx.merchant_id,
       ]);
@@ -1857,312 +2028,198 @@ export const DB = {
     await this._persist();
   },
 
-  // ========================================================================
-  // Recurring transactions
-  // ========================================================================
-  _normalizeDescription(desc) {
-    if (!desc) return "";
-    let normalized = desc.toLowerCase().trim();
-    normalized = normalized.replace(/[^a-z0-9\s]/g, "");
-    return normalized.replace(/\s+/g, " ").trim();
-  },
-
-  _amountsMatch(a, b) {
-    if (a === 0 && b === 0) return true;
-    if (a === 0 || b === 0) return false;
-    return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b)) <= RECURRING_AMOUNT_TOLERANCE;
-  },
-
-  _findFrequency(intervals) {
-    if (!intervals || intervals.length === 0) return null;
-    const sorted = [...intervals].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)];
-
-    let bestMatch = null;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    for (const freq of RECURRING_KNOWN_FREQUENCIES) {
-      const distance = Math.abs(median - freq);
-      if (distance <= RECURRING_FREQUENCY_TOLERANCE_DAYS && distance < bestDistance) {
-        bestDistance = distance;
-        bestMatch = freq;
-      }
-    }
-    if (bestMatch === null) return null;
-
-    const deviations = intervals.map((iv) => Math.abs(iv - bestMatch));
-    const avgDeviation = deviations.reduce((s, d) => s + d, 0) / deviations.length;
-    const confidence = Math.max(0.5, Math.min(1.0, 1.0 - avgDeviation / bestMatch));
-
-    return { frequency: bestMatch, confidence };
-  },
-
-  _groupTransactions(transactions) {
-    const groups = {};
-    for (const tx of transactions) {
-      const normDesc = this._normalizeDescription(tx.description);
-      if (!normDesc) continue;
-
-      let matchedKey = null;
-      for (const key of Object.keys(groups)) {
-        const [keyDesc, keyAmountStr] = [
-          key.substring(0, key.lastIndexOf("|")),
-          key.substring(key.lastIndexOf("|") + 1),
-        ];
-        const keyAmount = Number.parseFloat(keyAmountStr);
-        if (keyDesc === normDesc && this._amountsMatch(Math.abs(tx.amount), keyAmount)) {
-          matchedKey = key;
-          break;
-        }
-      }
-
-      if (matchedKey) {
-        groups[matchedKey].push(tx);
-      } else {
-        groups[`${normDesc}|${Math.abs(tx.amount)}`] = [tx];
-      }
-    }
-    return groups;
-  },
-
-  async detectRecurring(accountId = null) {
-    let sql = `SELECT * FROM transactions
-      WHERE transaction_type = 'expense'
-        AND description IS NOT NULL AND description != ''`;
-    const binds = [];
-    if (accountId) {
-      sql += " AND account_id = ?";
-      binds.push(accountId);
-    }
-    sql += " ORDER BY description, date";
-    const transactions = this._queryAll(sql, binds);
-
-    const groups = this._groupTransactions(transactions);
-    let patternsFound = 0;
-    let patternsNew = 0;
-    let patternsUpdated = 0;
-    let transactionsFlagged = 0;
-    const resultPatterns = [];
-
-    for (const [groupKey, groupTxs] of Object.entries(groups)) {
-      if (groupTxs.length < RECURRING_MIN_OCCURRENCES) continue;
-
-      groupTxs.sort((a, b) => (a.date > b.date ? 1 : -1));
-      const intervals = [];
-      for (let i = 1; i < groupTxs.length; i++) {
-        const delta = Math.round(
-          (new Date(groupTxs[i].date) - new Date(groupTxs[i - 1].date)) / 86400000,
-        );
-        if (delta > 0) intervals.push(delta);
-      }
-      if (intervals.length === 0) continue;
-
-      const freqResult = this._findFrequency(intervals);
-      if (!freqResult) continue;
-
-      const normDesc = groupKey.substring(0, groupKey.lastIndexOf("|"));
-      const avgAmount = groupTxs.reduce((s, t) => s + Math.abs(t.amount), 0) / groupTxs.length;
-      const categoryId = groupTxs[groupTxs.length - 1].category_id;
-      const groupAccountId = groupTxs[groupTxs.length - 1].account_id;
-      const lastSeen = groupTxs[groupTxs.length - 1].date;
-      const now = _now();
-
-      // Upsert pattern
-      const existing = this._queryOne(
-        "SELECT * FROM recurring_patterns WHERE description_pattern = ? AND account_id = ?",
-        [normDesc, groupAccountId],
-      );
-
-      const nextDueDate = _addDays(lastSeen, freqResult.frequency);
-
-      let patternId;
-      let isNew;
-      if (existing) {
-        this._exec(
-          `UPDATE recurring_patterns SET amount=?, frequency_days=?, last_seen=?,
-           confidence=?, category_id=?, is_active=1, next_due_date=? WHERE id=?`,
-          [
-            avgAmount,
-            freqResult.frequency,
-            lastSeen,
-            freqResult.confidence,
-            categoryId,
-            nextDueDate,
-            existing.id,
-          ],
-        );
-        patternId = existing.id;
-        isNew = false;
-      } else {
-        this._exec(
-          `INSERT INTO recurring_patterns
-           (description_pattern, amount, frequency_days, last_seen, confidence, category_id, account_id, is_active, next_due_date, created_at)
-           VALUES (?,?,?,?,?,?,?,1,?,?)`,
-          [
-            normDesc,
-            avgAmount,
-            freqResult.frequency,
-            lastSeen,
-            freqResult.confidence,
-            categoryId,
-            groupAccountId,
-            nextDueDate,
-            now,
-          ],
-        );
-        patternId = this._lastInsertId();
-        isNew = true;
-      }
-
-      // Flag transactions
-      let flagged = 0;
-      for (const tx of groupTxs) {
-        if (!_bool(tx.is_recurring)) {
-          this._exec("UPDATE transactions SET is_recurring = 1 WHERE id = ?", [tx.id]);
-          flagged++;
-        }
-      }
-
-      patternsFound++;
-      if (isNew) patternsNew++;
-      else patternsUpdated++;
-      transactionsFlagged += flagged;
-
-      // Build response
-      let categoryName = null;
-      if (categoryId) {
-        const cat = this._queryOne("SELECT name FROM categories WHERE id = ?", [categoryId]);
-        if (cat) categoryName = cat.name;
-      }
-
-      const pattern = this._queryOne("SELECT * FROM recurring_patterns WHERE id = ?", [patternId]);
-      resultPatterns.push({
-        id: pattern.id,
-        description_pattern: pattern.description_pattern,
-        amount: pattern.amount,
-        frequency_days: pattern.frequency_days,
-        last_seen: pattern.last_seen,
-        next_due_date: pattern.next_due_date,
-        confidence: pattern.confidence,
-        category_id: pattern.category_id || null,
-        category_name: categoryName,
-        account_id: pattern.account_id,
-        is_active: _bool(pattern.is_active),
-        created_at: pattern.created_at,
-      });
-    }
-
-    await this._persist();
-    return {
-      patterns_found: patternsFound,
-      patterns_new: patternsNew,
-      patterns_updated: patternsUpdated,
-      transactions_flagged: transactionsFlagged,
-      patterns: resultPatterns,
-    };
-  },
-
-  async getRecurringTransactions() {
-    const rows = this._queryAll(
-      "SELECT * FROM transactions WHERE is_recurring = 1 ORDER BY date DESC",
-    );
-    return rows.map((tx) => this._buildTransactionResponse(tx));
-  },
-
-  async getRecurringPatterns() {
-    const patterns = this._queryAll("SELECT * FROM recurring_patterns WHERE is_active = 1");
-    return patterns.map((p) => {
-      let categoryName = null;
-      if (p.category_id) {
-        const cat = this._queryOne("SELECT name FROM categories WHERE id = ?", [p.category_id]);
-        if (cat) categoryName = cat.name;
-      }
-      return {
-        id: p.id,
-        description_pattern: p.description_pattern,
-        amount: p.amount,
-        frequency_days: p.frequency_days,
-        last_seen: p.last_seen,
-        next_due_date: p.next_due_date || null,
-        reminder_days_before: p.reminder_days_before ?? 3,
-        is_reminder_enabled: _bool(p.is_reminder_enabled ?? 1),
-        confidence: p.confidence,
-        category_id: p.category_id || null,
-        category_name: categoryName,
-        account_id: p.account_id,
-        is_active: _bool(p.is_active),
-        created_at: p.created_at,
-      };
-    });
-  },
-
-  async deleteRecurringPattern(patternId) {
-    const pattern = this._queryOne("SELECT id FROM recurring_patterns WHERE id = ?", [patternId]);
-    if (!pattern) throw new Error("Recurring pattern not found");
-    this._exec("DELETE FROM recurring_patterns WHERE id = ?", [patternId]);
-    await this._persist();
-    return { detail: "Pattern deleted" };
-  },
-
   async getUpcomingBills(days = 7) {
     const today = _todayISO();
     const horizon = _addDays(today, days);
     const rows = this._queryAll(
-      `SELECT * FROM recurring_patterns
-       WHERE is_active = 1
-         AND is_reminder_enabled = 1
-         AND next_due_date IS NOT NULL
-         AND next_due_date <= ?
-       ORDER BY next_due_date ASC`,
+      `${FOLLOWUP_SELECT}
+       WHERE f.status = 'pending'
+         AND f.due_date IS NOT NULL
+         AND f.due_date <= ?
+       ORDER BY f.due_date ASC`,
       [horizon],
     );
-    return rows.map((p) => {
-      let categoryName = null;
-      if (p.category_id) {
-        const cat = this._queryOne("SELECT name FROM categories WHERE id = ?", [p.category_id]);
-        if (cat) categoryName = cat.name;
-      }
-      return {
-        id: p.id,
-        description_pattern: p.description_pattern,
-        amount: p.amount,
-        frequency_days: p.frequency_days,
-        last_seen: p.last_seen,
-        next_due_date: p.next_due_date,
-        reminder_days_before: p.reminder_days_before ?? 3,
-        is_reminder_enabled: _bool(p.is_reminder_enabled ?? 1),
-        category_id: p.category_id || null,
-        category_name: categoryName,
-        account_id: p.account_id,
-        days_remaining: _daysBetween(today, p.next_due_date),
-      };
-    });
+    return rows.map((r) => this._buildFollowUpResponse(r, today));
   },
 
-  async updateRecurringPattern(id, data) {
-    const pattern = this._queryOne("SELECT id FROM recurring_patterns WHERE id = ?", [id]);
-    if (!pattern) throw new Error("Recurring pattern not found");
-    const updates = [];
+  // ========================================================================
+  // Transaction follow-ups / reminders
+  // ========================================================================
+  _buildFollowUpResponse(r, today = _todayISO()) {
+    return {
+      id: r.id,
+      transaction_id: r.transaction_id,
+      title: r.title || null,
+      follow_up_type: r.follow_up_type,
+      due_date: r.due_date || null,
+      status: r.status,
+      is_recurring: _bool(r.is_recurring),
+      recurrence: r.recurrence || null,
+      completed_at: r.completed_at || null,
+      notes: r.notes || null,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      amount: r.amount ?? null,
+      description: r.description ?? null,
+      merchant_name: r.merchant_name ?? null,
+      merchant_upi_id: r.merchant_upi_id ?? null,
+      category_name: r.category_name ?? null,
+      transaction_type: r.transaction_type ?? null,
+      account_id: r.account_id ?? null,
+      transaction_date: r.transaction_date ?? null,
+      days_remaining: r.due_date ? _daysBetween(today, r.due_date) : null,
+    };
+  },
+
+  async getFollowUpById(id) {
+    const r = this._queryOne(`${FOLLOWUP_SELECT} WHERE f.id = ?`, [id]);
+    return r ? this._buildFollowUpResponse(r) : null;
+  },
+
+  async getFollowUp(transactionId) {
+    const r = this._queryOne(`${FOLLOWUP_SELECT} WHERE f.transaction_id = ?`, [transactionId]);
+    return r ? this._buildFollowUpResponse(r) : null;
+  },
+
+  async getFollowUps({ status, follow_up_type } = {}) {
+    const where = [];
     const binds = [];
-    if (data.next_due_date !== undefined) {
-      updates.push("next_due_date = ?");
-      binds.push(data.next_due_date);
+    if (status) {
+      where.push("f.status = ?");
+      binds.push(status);
     }
-    if (data.reminder_days_before !== undefined) {
-      updates.push("reminder_days_before = ?");
-      binds.push(Number(data.reminder_days_before));
+    if (follow_up_type) {
+      where.push("f.follow_up_type = ?");
+      binds.push(follow_up_type);
     }
-    if (data.is_reminder_enabled !== undefined) {
-      updates.push("is_reminder_enabled = ?");
-      binds.push(data.is_reminder_enabled ? 1 : 0);
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const rows = this._queryAll(`${FOLLOWUP_SELECT} ${whereSql}`, binds);
+    const today = _todayISO();
+    const mapped = rows.map((r) => this._buildFollowUpResponse(r, today));
+    // Pending first (overdue → due soon → upcoming by due_date asc, undated last),
+    // then done items sorted by completion time descending.
+    mapped.sort((a, b) => {
+      const aDone = a.status === "done";
+      const bDone = b.status === "done";
+      if (aDone !== bDone) return aDone ? 1 : -1;
+      if (!aDone) {
+        if (a.days_remaining === null && b.days_remaining === null) return 0;
+        if (a.days_remaining === null) return 1;
+        if (b.days_remaining === null) return -1;
+        return a.days_remaining - b.days_remaining;
+      }
+      return _ts(b.completed_at) - _ts(a.completed_at);
+    });
+    return mapped;
+  },
+
+  async createFollowUp(transactionId, data = {}) {
+    const tx = this._queryOne("SELECT id, transaction_id FROM transactions WHERE id = ?", [
+      transactionId,
+    ]);
+    if (!tx) throw new Error("Transaction not found");
+    const now = _now();
+    this._exec(
+      `INSERT INTO transaction_follow_ups
+         (transaction_id, title, follow_up_type, due_date, status, is_recurring, recurrence,
+          notes, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [
+        transactionId,
+        data.title || null,
+        data.follow_up_type || "reminder",
+        data.due_date || null,
+        "pending",
+        data.is_recurring ? 1 : 0,
+        data.recurrence || null,
+        data.notes || null,
+        now,
+        now,
+      ],
+    );
+    const id = this._lastInsertId();
+    if (tx.transaction_id) this._clearTombstone("follow_up", tx.transaction_id);
+    await this._persist();
+    return this.getFollowUpById(id);
+  },
+
+  async updateFollowUp(id, fields = {}) {
+    const existing = this._queryOne("SELECT id FROM transaction_follow_ups WHERE id = ?", [id]);
+    if (!existing) throw new Error("Follow-up not found");
+    const allowed = new Set([
+      "title",
+      "follow_up_type",
+      "due_date",
+      "status",
+      "is_recurring",
+      "recurrence",
+      "notes",
+      "completed_at",
+    ]);
+    const cols = [];
+    const binds = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (!allowed.has(key)) continue;
+      cols.push(`${key} = ?`);
+      binds.push(key === "is_recurring" ? (value ? 1 : 0) : (value ?? null));
     }
-    if (updates.length === 0) throw new Error("No fields to update");
-    updates.push("updated_at = ?");
+    if (cols.length === 0) return this.getFollowUpById(id);
+    cols.push("updated_at = ?");
     binds.push(_now());
     binds.push(id);
-    this._exec(`UPDATE recurring_patterns SET ${updates.join(", ")} WHERE id = ?`, binds);
+    this._exec(`UPDATE transaction_follow_ups SET ${cols.join(", ")} WHERE id = ?`, binds);
     await this._persist();
-    return { detail: "Pattern updated" };
+    return this.getFollowUpById(id);
+  },
+
+  async deleteFollowUp(id) {
+    const row = this._queryOne(
+      `SELECT f.id, t.transaction_id AS tx_key
+       FROM transaction_follow_ups f
+       LEFT JOIN transactions t ON t.id = f.transaction_id
+       WHERE f.id = ?`,
+      [id],
+    );
+    if (!row) throw new Error("Follow-up not found");
+    this._exec("DELETE FROM transaction_follow_ups WHERE id = ?", [id]);
+    if (row.tx_key) this._recordTombstone("follow_up", row.tx_key);
+    await this._persist();
+    return { detail: "Follow-up deleted" };
+  },
+
+  async markFollowUpDone(id) {
+    const f = this._queryOne("SELECT * FROM transaction_follow_ups WHERE id = ?", [id]);
+    if (!f) throw new Error("Follow-up not found");
+    const now = _now();
+    if (_bool(f.is_recurring)) {
+      const base = f.due_date || _todayISO();
+      const nextDue = _advanceByRecurrence(base, f.recurrence);
+      this._exec(
+        `UPDATE transaction_follow_ups
+         SET completed_at = ?, due_date = ?, status = 'pending', updated_at = ? WHERE id = ?`,
+        [now, nextDue, now, id],
+      );
+    } else {
+      this._exec(
+        `UPDATE transaction_follow_ups
+         SET completed_at = ?, status = 'done', updated_at = ? WHERE id = ?`,
+        [now, now, id],
+      );
+    }
+    await this._persist();
+    return this.getFollowUpById(id);
+  },
+
+  async reopenFollowUp(id) {
+    const f = this._queryOne("SELECT id FROM transaction_follow_ups WHERE id = ?", [id]);
+    if (!f) throw new Error("Follow-up not found");
+    this._exec(
+      `UPDATE transaction_follow_ups
+       SET status = 'pending', completed_at = NULL, updated_at = ? WHERE id = ?`,
+      [_now(), id],
+    );
+    await this._persist();
+    return this.getFollowUpById(id);
   },
 
   // ========================================================================
@@ -3490,6 +3547,7 @@ export const DB = {
       this._mergeRecurring(tables.recurring_patterns, accMap, catMap, stats);
       this._mergeBudgets(tables.budgets, catMap, stats);
       this._mergeGoals(tables.goals, isTomb, stats);
+      this._mergeFollowUps(tables.transaction_follow_ups, txMap, isTomb, stats);
       this._mergeProcessedGmail(tables.processed_gmail_messages, stats);
       this._mergeTransactionTags(tables.transaction_tags, txMap, tagMap, stats);
       this._mergeConversations(tables.conversations, stats);
@@ -3610,6 +3668,18 @@ export const DB = {
       if (del === undefined || del < _ts(row.updated_at)) continue;
       this._exec("DELETE FROM goals WHERE id = ?", [row.id]);
       stats.deleted.goals++;
+    }
+
+    // Follow-ups: keyed by the parent transaction's stable transaction_id (1:1 relation).
+    for (const row of this._queryAll(
+      `SELECT f.id AS id, f.updated_at AS updated_at, t.transaction_id AS tx_key
+       FROM transaction_follow_ups f
+       LEFT JOIN transactions t ON t.id = f.transaction_id`,
+    )) {
+      const del = tombFor("follow_up", row.tx_key);
+      if (del === undefined || del < _ts(row.updated_at)) continue;
+      this._exec("DELETE FROM transaction_follow_ups WHERE id = ?", [row.id]);
+      stats.deleted.transaction_follow_ups++;
     }
   },
 
@@ -4055,6 +4125,70 @@ export const DB = {
           ],
         );
         stats.inserted.goals++;
+      }
+    }
+  },
+
+  // Match by the parent transaction (1:1, remapped via txMap); LWW on all fields;
+  // delete-propagation supported (key = parent transaction's stable transaction_id).
+  _mergeFollowUps(rows, txMap, isTomb, stats) {
+    for (const row of rows) {
+      const localTx = txMap.get(row.transaction_id);
+      if (localTx === undefined) {
+        stats.skipped.transaction_follow_ups++;
+        continue;
+      }
+      const txRow = this._queryOne("SELECT transaction_id FROM transactions WHERE id = ?", [
+        localTx,
+      ]);
+      const key = txRow ? txRow.transaction_id : null;
+      if (isTomb("follow_up", key, _ts(row.updated_at))) continue;
+      const existing = this._queryOne(
+        "SELECT id, updated_at FROM transaction_follow_ups WHERE transaction_id = ?",
+        [localTx],
+      );
+      if (existing) {
+        if (_ts(row.updated_at) > _ts(existing.updated_at)) {
+          this._exec(
+            `UPDATE transaction_follow_ups SET title = ?, follow_up_type = ?, due_date = ?,
+               status = ?, is_recurring = ?, recurrence = ?, completed_at = ?, notes = ?,
+               updated_at = ? WHERE id = ?`,
+            [
+              row.title ?? null,
+              row.follow_up_type ?? "reminder",
+              row.due_date ?? null,
+              row.status ?? "pending",
+              row.is_recurring ?? 0,
+              row.recurrence ?? null,
+              row.completed_at ?? null,
+              row.notes ?? null,
+              row.updated_at ?? _now(),
+              existing.id,
+            ],
+          );
+          stats.updated.transaction_follow_ups++;
+        }
+      } else {
+        this._exec(
+          `INSERT INTO transaction_follow_ups
+             (transaction_id, title, follow_up_type, due_date, status, is_recurring, recurrence,
+              completed_at, notes, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            localTx,
+            row.title ?? null,
+            row.follow_up_type ?? "reminder",
+            row.due_date ?? null,
+            row.status ?? "pending",
+            row.is_recurring ?? 0,
+            row.recurrence ?? null,
+            row.completed_at ?? null,
+            row.notes ?? null,
+            row.created_at ?? _now(),
+            row.updated_at ?? _now(),
+          ],
+        );
+        stats.inserted.transaction_follow_ups++;
       }
     }
   },

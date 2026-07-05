@@ -9,5 +9,8 @@ node_modules/
 static/js/sql-wasm.js
 static/js/sql-wasm.wasm
 
+# Generated per-environment config (from .env)
+static/js/env.js
+
 # Test artifacts
 test-results/

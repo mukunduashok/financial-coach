@@ -380,3 +380,245 @@ describe("BUG 4: API.getCreditAccountBalance excludes Not-an-Expense rows", () =
 		expect(acc.credit_cycle_balance).toBe(result.cycle_balance);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// FINCO-50 — Merchant rename memory through the API bridge
+//
+// Verifies the `learn_merchant_name` flag passes untouched through
+// API.updateTransaction into DB.updateTransaction, and that the resulting
+// merchant identity + retro-linking behave end-to-end via the bridge.
+// ---------------------------------------------------------------------------
+describe("FINCO-50: merchant rename memory via API bridge", () => {
+	beforeEach(freshDB);
+
+	it("learn_merchant_name=true through the bridge creates an identity keyed on the original name", async () => {
+		const acct = await DB.createAccount({
+			name: "Acct",
+			balance: 0,
+			account_type: "savings",
+		});
+		const cats = await DB.getCategories();
+		const foodId = cats.find((c) => c.name === "Food & Dining").id;
+
+		const tx = await API.createTransaction({
+			date: "2025-04-01",
+			amount: -200,
+			description: "food",
+			transaction_type: "expense",
+			account_id: acct.id,
+			category_id: foodId,
+			merchant_name: "PAYTM*SWIGGY",
+		});
+		expect(tx.merchant_id).toBeNull();
+
+		const updated = await API.updateTransaction(tx.id, {
+			merchant_name: "Swiggy",
+			learn_merchant_name: true,
+		});
+
+		// The bridge forwarded the flag; an identity keyed on the original string exists.
+		const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["Swiggy"]);
+		expect(merchant).not.toBeNull();
+		expect(updated.merchant_id).toBe(merchant.id);
+
+		// A future transaction with the ORIGINAL string maps to the new name via the bridge.
+		const tx2 = await API.createTransaction({
+			date: "2025-04-10",
+			amount: -150,
+			description: "food",
+			transaction_type: "expense",
+			account_id: acct.id,
+			merchant_name: "PAYTM*SWIGGY",
+		});
+		expect(tx2.merchant_name).toBe("Swiggy");
+		expect(tx2.merchant_id).toBe(merchant.id);
+	});
+
+	it("rename via the bridge does NOT alter the transaction category", async () => {
+		const acct = await DB.createAccount({
+			name: "Acct",
+			balance: 0,
+			account_type: "savings",
+		});
+		const cats = await DB.getCategories();
+		const foodId = cats.find((c) => c.name === "Food & Dining").id;
+
+		const tx = await API.createTransaction({
+			date: "2025-04-01",
+			amount: -200,
+			description: "food",
+			transaction_type: "expense",
+			account_id: acct.id,
+			category_id: foodId,
+			merchant_name: "RAW MERCHANT",
+		});
+
+		const updated = await API.updateTransaction(tx.id, {
+			merchant_name: "Pretty Name",
+			learn_merchant_name: true,
+		});
+		expect(updated.category_id).toBe(foodId);
+	});
+
+	it("simultaneous category-learn + rename via the bridge sets both new category and display name", async () => {
+		const acct = await DB.createAccount({
+			name: "Acct",
+			balance: 0,
+			account_type: "savings",
+		});
+		const cats = await DB.getCategories();
+		const groceriesId = cats.find((c) => c.name === "Groceries").id;
+
+		const tx = await API.createTransaction({
+			date: "2025-04-01",
+			amount: -200,
+			description: "shopping",
+			transaction_type: "expense",
+			account_id: acct.id,
+			merchant_name: "DMART RETAIL",
+		});
+
+		await API.updateTransaction(tx.id, {
+			category_id: groceriesId,
+			merchant_name: "DMart",
+			learn_merchant: true,
+			learn_merchant_name: true,
+		});
+
+		const merchant = DB._queryOne("SELECT * FROM merchants WHERE display_name = ?", ["DMart"]);
+		expect(merchant).not.toBeNull();
+		expect(merchant.category_id).toBe(groceriesId);
+
+		// Future transaction with the original string inherits both the category and the name.
+		const tx2 = await API.createTransaction({
+			date: "2025-04-10",
+			amount: -180,
+			description: "shopping",
+			transaction_type: "expense",
+			account_id: acct.id,
+			merchant_name: "DMART RETAIL",
+		});
+		expect(tx2.merchant_name).toBe("DMart");
+		expect(tx2.category_id).toBe(groceriesId);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// FINCO-22: Transaction Follow-ups — API bridge wiring (all seven delegates)
+// ---------------------------------------------------------------------------
+describe("Transaction Follow-ups API bridge wiring", () => {
+	beforeEach(freshDB);
+
+	async function seedTx(overrides = {}) {
+		const acct = await DB.createAccount({
+			name: "FU Bridge Account",
+			balance: 1000,
+			account_type: "savings",
+		});
+		const cats = await DB.getCategories();
+		return DB.createTransaction({
+			date: "2025-06-01",
+			amount: -499,
+			description: "Netflix",
+			transaction_type: "expense",
+			account_id: acct.id,
+			category_id: cats[0].id,
+			...overrides,
+		});
+	}
+
+	it("API.createFollowUp() delegates to DB.createFollowUp() and is retrievable", async () => {
+		const tx = await seedTx();
+		const fu = await API.createFollowUp(tx.id, {
+			title: "Renew Netflix",
+			follow_up_type: "bill",
+			due_date: "2025-07-01",
+		});
+		expect(fu.id).toBeTypeOf("number");
+		expect(fu.status).toBe("pending");
+		expect(fu.transaction_id).toBe(tx.id);
+
+		const viaDb = await DB.getFollowUp(tx.id);
+		expect(viaDb.title).toBe("Renew Netflix");
+	});
+
+	it("API.getFollowUp(txId) delegates to DB.getFollowUp()", async () => {
+		const tx = await seedTx();
+		await API.createFollowUp(tx.id, { title: "Bridge get", follow_up_type: "reminder" });
+		const fu = await API.getFollowUp(tx.id);
+		expect(fu).not.toBeNull();
+		expect(fu.title).toBe("Bridge get");
+	});
+
+	it("API.getFollowUps(filters) delegates to DB.getFollowUps() with status filtering", async () => {
+		const txA = await seedTx({ transaction_id: "FU-BR-A" });
+		const txB = await seedTx({ transaction_id: "FU-BR-B" });
+		const a = await API.createFollowUp(txA.id, { title: "A", due_date: "2025-07-01" });
+		await API.createFollowUp(txB.id, { title: "B", due_date: "2025-07-02" });
+		await API.markFollowUpDone(a.id);
+
+		const pending = await API.getFollowUps({ status: "pending" });
+		expect(pending).toHaveLength(1);
+		expect(pending[0].title).toBe("B");
+
+		const all = await API.getFollowUps({});
+		expect(all).toHaveLength(2);
+	});
+
+	it("API.updateFollowUp(id, fields) delegates to DB.updateFollowUp()", async () => {
+		const tx = await seedTx();
+		const fu = await API.createFollowUp(tx.id, { title: "Old", due_date: "2025-07-01" });
+		const updated = await API.updateFollowUp(fu.id, {
+			title: "New",
+			due_date: "2025-08-01",
+		});
+		expect(updated.title).toBe("New");
+		expect(updated.due_date).toBe("2025-08-01");
+	});
+
+	it("API.markFollowUpDone(id) delegates to DB.markFollowUpDone() (non-recurring → done)", async () => {
+		const tx = await seedTx();
+		const fu = await API.createFollowUp(tx.id, {
+			title: "One-off",
+			due_date: "2025-07-01",
+			is_recurring: false,
+		});
+		const done = await API.markFollowUpDone(fu.id);
+		expect(done.status).toBe("done");
+		expect(done.completed_at).toBeTruthy();
+	});
+
+	it("API.reopenFollowUp(id) delegates to DB.reopenFollowUp()", async () => {
+		const tx = await seedTx();
+		const fu = await API.createFollowUp(tx.id, { title: "Reopen", is_recurring: false });
+		await API.markFollowUpDone(fu.id);
+		const reopened = await API.reopenFollowUp(fu.id);
+		expect(reopened.status).toBe("pending");
+		expect(reopened.completed_at).toBeNull();
+	});
+
+	it("API.deleteFollowUp(id) delegates to DB.deleteFollowUp() and records a tombstone", async () => {
+		const tx = await seedTx();
+		const fu = await API.createFollowUp(tx.id, { title: "Delete me" });
+		await API.deleteFollowUp(fu.id);
+		expect(await API.getFollowUp(tx.id)).toBeNull();
+
+		const tombstones = DB._queryAll(
+			"SELECT * FROM sync_tombstones WHERE entity_type = 'follow_up'",
+		);
+		expect(tombstones).toHaveLength(1);
+	});
+
+	it("API.getUpcomingBills(days) returns pending follow-ups within the window", async () => {
+		const iso = (days) => new Date(Date.now() + days * 86_400_000).toISOString().split("T")[0];
+		const txSoon = await seedTx({ transaction_id: "FU-UB-SOON" });
+		const txLater = await seedTx({ transaction_id: "FU-UB-LATER" });
+		await API.createFollowUp(txSoon.id, { title: "Soon", due_date: iso(2) });
+		await API.createFollowUp(txLater.id, { title: "Later", due_date: iso(30) });
+
+		const bills = await API.getUpcomingBills(7);
+		const titles = bills.map((b) => b.title);
+		expect(titles).toContain("Soon");
+		expect(titles).not.toContain("Later");
+	});
+});

@@ -50,6 +50,25 @@ const ACCOUNT_GROUPS = [
   { key: "others", label: "Others", types: null, tileType: "wallet" },
 ];
 
+// Follow-up / reminder option lists (kept in one place so the edit modal and the
+// Bills & Reminders panel stay in sync).
+const FOLLOWUP_TYPES = [
+  { value: "reminder", label: "Reminder" },
+  { value: "bill", label: "Bill" },
+  { value: "refund", label: "Refund expected" },
+  { value: "recurring_deposit", label: "Recurring deposit" },
+  { value: "payment", label: "Recurring payment" },
+];
+
+const FOLLOWUP_RECURRENCES = [
+  { value: "weekly", label: "Weekly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "yearly", label: "Yearly" },
+];
+
+const FOLLOWUP_TYPE_LABELS = Object.fromEntries(FOLLOWUP_TYPES.map((t) => [t.value, t.label]));
+
 function formatAccountBalance(account) {
   if (!BALANCE_DISPLAY_TYPES.has(account.account_type)) {
     return "";
@@ -242,6 +261,21 @@ document.addEventListener("click", (e) => {
       break;
     case "switch-tx-tab":
       switchTxTab(el.dataset.mode);
+      break;
+    case "filter-followups":
+      filterFollowUps(el.dataset.filter);
+      break;
+    case "mark-followup-done":
+      markFollowUpDone(id);
+      break;
+    case "reopen-followup":
+      reopenFollowUp(id);
+      break;
+    case "remove-followup":
+      removeFollowUp(id);
+      break;
+    case "open-tx-from-followup":
+      showEditTransaction(id);
       break;
     case "export-transactions":
       exportTransactions(format);
@@ -581,15 +615,26 @@ document.addEventListener("change", (e) => {
     case "import-backup":
       importBackup(el.files[0]);
       break;
-    case "bill-reminder-days":
-      saveBillReminderDays(el.dataset.id, el);
+    case "followup-due-date":
+      saveFollowUpDueDate(el.dataset.id, el);
       break;
-    case "bill-due-date":
-      saveBillDueDate(el.dataset.id, el);
+    case "toggle-followup-recurring":
+      toggleFollowUpRecurring(el.dataset.id, el);
       break;
-    case "toggle-bill-reminder":
-      toggleBillReminder(el.dataset.id, el);
+    case "followup-recurrence":
+      saveFollowUpRecurrence(el.dataset.id, el);
       break;
+    case "toggle-followup-form": {
+      const form = document.getElementById("edit-followup-form");
+      if (form)
+        form.style.display = /** @type {HTMLInputElement} */ (e.target).checked ? "" : "none";
+      break;
+    }
+    case "toggle-followup-recurrence-select": {
+      const grp = document.getElementById("edit-followup-recurrence-group");
+      if (grp) grp.style.display = /** @type {HTMLInputElement} */ (e.target).checked ? "" : "none";
+      break;
+    }
     case "toggle-excluded-from-expenses":
       API.toggleExcludedFromExpenses(Number.parseInt(el.dataset.id, 10), el.checked).catch((err) =>
         Toast.error(err.message),
@@ -1115,59 +1160,82 @@ function billItemHTML(bill) {
     urgencyClass = "bill-row--ok";
     label = `${dr}d`;
   }
+  const name =
+    bill.title || bill.merchant_name || bill.merchant_upi_id || bill.description || "Follow-up";
   return `
-    <li class="bill-row ${urgencyClass}">
-      <div class="bill-row-name">${escapeHtml(bill.description_pattern)}</div>
+    <li class="bill-row ${urgencyClass}" data-action="open-tx-from-followup" data-id="${bill.transaction_id}">
+      <div class="bill-row-name">${escapeHtml(name)}</div>
       <div class="bill-row-meta">
-        <span class="bill-row-amount">${formatCurrency(bill.amount)}</span>
+        ${bill.amount != null ? `<span class="bill-row-amount">${formatCurrency(bill.amount)}</span>` : ""}
         <span class="bill-days-badge ${urgencyClass}">${escapeHtml(label)}</span>
       </div>
     </li>
   `;
 }
 
-function billMgmtRowHTML(p) {
-  const freqLabel =
-    p.frequency_days === 7
-      ? "Weekly"
-      : p.frequency_days === 14
-        ? "Fortnightly"
-        : p.frequency_days === 30
-          ? "Monthly"
-          : p.frequency_days === 90
-            ? "Quarterly"
-            : p.frequency_days === 365
-              ? "Yearly"
-              : `Every ${p.frequency_days}d`;
-  const remDays = p.reminder_days_before ?? 3;
+function followUpRowHTML(f) {
+  const name = f.title || f.merchant_name || f.merchant_upi_id || f.description || "Follow-up";
+  const typeLabel = FOLLOWUP_TYPE_LABELS[f.follow_up_type] || f.follow_up_type;
+  const isDone = f.status === "done";
+  const dr = f.days_remaining;
+  let dueBadge = "";
+  if (!isDone && dr !== null && dr !== undefined) {
+    let cls = "bill-row--ok";
+    let label = `${dr}d`;
+    if (dr < 3) {
+      cls = "bill-row--urgent";
+      label = dr < 0 ? "Overdue" : dr === 0 ? "Due today" : `${dr}d`;
+    } else if (dr <= 5) {
+      cls = "bill-row--warning";
+    }
+    dueBadge = `<span class="bill-days-badge ${cls}">${escapeHtml(label)}</span>`;
+  } else if (isDone) {
+    dueBadge = `<span class="bill-days-badge bill-row--ok">Done</span>`;
+  }
+  const recurrenceOptions = FOLLOWUP_RECURRENCES.map(
+    (r) =>
+      `<option value="${r.value}" ${f.recurrence === r.value ? "selected" : ""}>${r.label}</option>`,
+  ).join("");
   return `
-    <div class="bill-mgmt-row">
+    <div class="bill-mgmt-row" data-followup-id="${f.id}">
       <div class="bill-mgmt-name">
-        <strong>${escapeHtml(p.description_pattern)}</strong>
-        <span class="bill-mgmt-meta">${formatCurrency(p.amount)} · ${escapeHtml(freqLabel)}</span>
+        <strong>${escapeHtml(name)}</strong>
+        <span class="bill-mgmt-meta">
+          ${f.amount != null ? `${formatCurrency(f.amount)} · ` : ""}${escapeHtml(typeLabel)}
+          ${dueBadge}
+        </span>
       </div>
       <div class="bill-mgmt-controls">
         <div class="form-group" style="margin:0">
-          <label style="font-size:0.75rem">Next due</label>
-          <input type="date" class="form-control form-control-sm" value="${p.next_due_date || ""}"
-            data-change="bill-due-date" data-id="${p.id}">
+          <label style="font-size:0.75rem">Due date</label>
+          <input type="date" class="form-control form-control-sm" value="${f.due_date || ""}"
+            data-change="followup-due-date" data-id="${f.id}" ${isDone ? "disabled" : ""}>
         </div>
-        <div class="form-group" style="margin:0">
-          <label style="font-size:0.75rem">Remind</label>
-          <select class="form-control form-control-sm"
-            data-change="bill-reminder-days" data-id="${p.id}">
-            <option value="1" ${remDays === 1 ? "selected" : ""}>1 day before</option>
-            <option value="3" ${remDays === 3 ? "selected" : ""}>3 days before</option>
-            <option value="7" ${remDays === 7 ? "selected" : ""}>7 days before</option>
-          </select>
-        </div>
-        <div class="bill-mgmt-toggle" title="${p.is_reminder_enabled ? "Disable" : "Enable"} reminder">
-          <span>Enabled</span>
+        <div class="bill-mgmt-toggle" title="Repeat this follow-up">
+          <span>Recurring</span>
           <label class="toggle-switch">
-            <input type="checkbox" ${p.is_reminder_enabled ? "checked" : ""}
-              data-change="toggle-bill-reminder" data-id="${p.id}">
+            <input type="checkbox" ${f.is_recurring ? "checked" : ""}
+              data-change="toggle-followup-recurring" data-id="${f.id}">
             <span class="toggle-slider"></span>
           </label>
+        </div>
+        ${
+          f.is_recurring
+            ? `<div class="form-group" style="margin:0">
+          <label style="font-size:0.75rem">Every</label>
+          <select class="form-control form-control-sm" data-change="followup-recurrence"
+            data-id="${f.id}">${recurrenceOptions}</select>
+        </div>`
+            : ""
+        }
+        <div class="bill-mgmt-actions">
+          ${
+            isDone
+              ? `<button class="btn btn-outline btn-sm" data-action="reopen-followup" data-id="${f.id}">Reopen</button>`
+              : `<button class="btn btn-primary btn-sm" data-action="mark-followup-done" data-id="${f.id}">Mark done</button>`
+          }
+          <button class="btn btn-outline btn-sm" data-action="open-tx-from-followup" data-id="${f.transaction_id}">Open</button>
+          <button class="btn btn-outline btn-sm" data-action="remove-followup" data-id="${f.id}">Remove</button>
         </div>
       </div>
     </div>
@@ -1192,6 +1260,7 @@ const txFilterState = {
 
 const TX_PAGE_SIZE = 50;
 let txTab = "transactions"; // "transactions" | "bills"
+let followUpFilter = "pending"; // "pending" | "done" | "all"
 let txOffset = 0;
 let txHasMore = true;
 let txLoading = false;
@@ -1484,23 +1553,41 @@ function switchTxTab(mode) {
   renderTransactions();
 }
 
+function refreshTransactionsScreen() {
+  if (Router.currentScreen !== "#/transactions") return;
+  if (txTab === "bills") renderBillsPanel();
+  else loadTransactionList(true);
+}
+
 async function renderBillsPanel() {
   const container = document.getElementById("tx-tab-content");
   if (!container) return;
   try {
-    const patterns = await API.getRecurringPatterns();
-    if (patterns.length === 0) {
+    const status = followUpFilter === "all" ? undefined : followUpFilter;
+    const followUps = await API.getFollowUps({ status });
+    const chip = (value, label) =>
+      `<button class="tab-btn ${followUpFilter === value ? "active" : ""}"
+        data-action="filter-followups" data-filter="${value}">${label}</button>`;
+    const filterBar = `
+      <div class="followup-filter-bar">
+        ${chip("pending", "Pending")}
+        ${chip("done", "Done")}
+        ${chip("all", "All")}
+      </div>`;
+
+    if (followUps.length === 0) {
       container.innerHTML = `
+        ${filterBar}
         <div class="empty-state">
-          <div class="empty-icon">🔁</div>
-          <div class="empty-text">No recurring patterns detected yet. Run Gmail Sync to detect bills.</div>
+          <div class="empty-icon">🔔</div>
+          <div class="empty-text">No follow-ups here yet. Open any transaction and flag it for follow-up to track bills, refunds, or recurring payments.</div>
         </div>`;
       return;
     }
     container.innerHTML = `
+      ${filterBar}
       <div class="card">
-        <div class="card-title">Manage Bills &amp; Reminders</div>
-        ${patterns.map(billMgmtRowHTML).join("")}
+        ${followUps.map(followUpRowHTML).join("")}
       </div>`;
   } catch (err) {
     container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div>
@@ -1508,30 +1595,70 @@ async function renderBillsPanel() {
   }
 }
 
-async function saveBillReminderDays(id, el) {
-  try {
-    await API.updateRecurringPattern(Number(id), { reminder_days_before: Number(el.value) });
-    Toast.success("Reminder updated");
-  } catch (err) {
-    Toast.error(err.message);
-  }
+function filterFollowUps(filter) {
+  followUpFilter = filter;
+  renderBillsPanel();
 }
 
-async function saveBillDueDate(id, el) {
+async function saveFollowUpDueDate(id, el) {
   try {
-    await API.updateRecurringPattern(Number(id), { next_due_date: el.value || null });
+    await API.updateFollowUp(Number(id), { due_date: el.value || null });
     Toast.success("Due date updated");
+    renderBillsPanel();
   } catch (err) {
     Toast.error(err.message);
   }
 }
 
-async function toggleBillReminder(id, el) {
+async function toggleFollowUpRecurring(id, el) {
   try {
-    await API.updateRecurringPattern(Number(id), { is_reminder_enabled: el.checked });
+    await API.updateFollowUp(Number(id), { is_recurring: el.checked });
+    renderBillsPanel();
   } catch (err) {
     Toast.error(err.message);
     el.checked = !el.checked;
+  }
+}
+
+async function saveFollowUpRecurrence(id, el) {
+  try {
+    await API.updateFollowUp(Number(id), { recurrence: el.value });
+    Toast.success("Recurrence updated");
+    renderBillsPanel();
+  } catch (err) {
+    Toast.error(err.message);
+  }
+}
+
+async function markFollowUpDone(id) {
+  try {
+    await API.markFollowUpDone(Number(id));
+    Toast.success("Marked done");
+    renderBillsPanel();
+    if (Router.currentScreen === "#/") renderDashboard();
+  } catch (err) {
+    Toast.error(err.message);
+  }
+}
+
+async function reopenFollowUp(id) {
+  try {
+    await API.reopenFollowUp(Number(id));
+    Toast.success("Follow-up reopened");
+    renderBillsPanel();
+  } catch (err) {
+    Toast.error(err.message);
+  }
+}
+
+async function removeFollowUp(id) {
+  try {
+    await API.deleteFollowUp(Number(id));
+    Toast.success("Follow-up removed");
+    renderBillsPanel();
+    if (Router.currentScreen === "#/") renderDashboard();
+  } catch (err) {
+    Toast.error(err.message);
   }
 }
 
@@ -1710,6 +1837,93 @@ function detectPaymentType(description, merchantUpiId) {
   return "Unknown";
 }
 
+// Builds the follow-up / reminder section shown inside the edit-transaction modal.
+// `followUp` is the existing follow-up for this transaction (or null when none).
+function followUpFormHTML(followUp) {
+  const enabled = !!followUp;
+  const type = followUp?.follow_up_type || "reminder";
+  const typeOptions = FOLLOWUP_TYPES.map(
+    (t) => `<option value="${t.value}" ${type === t.value ? "selected" : ""}>${t.label}</option>`,
+  ).join("");
+  const recurrence = followUp?.recurrence || "monthly";
+  const recurrenceOptions = FOLLOWUP_RECURRENCES.map(
+    (r) =>
+      `<option value="${r.value}" ${recurrence === r.value ? "selected" : ""}>${r.label}</option>`,
+  ).join("");
+  return `
+    <div class="form-group">
+      <label class="followup-flag">
+        <input type="checkbox" id="edit-followup-enabled" data-change="toggle-followup-form" ${enabled ? "checked" : ""}>
+        <span>Flag for follow-up / reminder</span>
+      </label>
+    </div>
+    <div id="edit-followup-form" style="display:${enabled ? "" : "none"}">
+      <div class="form-group">
+        <label>Follow-up type</label>
+        <select class="form-control" id="edit-followup-type">${typeOptions}</select>
+      </div>
+      <div class="form-group">
+        <label>Title (optional)</label>
+        <input type="text" class="form-control" id="edit-followup-title"
+          value="${escapeHtml(followUp?.title || "")}" placeholder="e.g. Electricity bill">
+      </div>
+      <div class="form-group">
+        <label>Due date</label>
+        <input type="date" class="form-control" id="edit-followup-due" value="${followUp?.due_date || ""}">
+      </div>
+      <div class="form-group">
+        <label class="followup-flag">
+          <input type="checkbox" id="edit-followup-recurring" data-change="toggle-followup-recurrence-select" ${followUp?.is_recurring ? "checked" : ""}>
+          <span>Repeats</span>
+        </label>
+      </div>
+      <div class="form-group" id="edit-followup-recurrence-group" style="display:${followUp?.is_recurring ? "" : "none"}">
+        <label>Every</label>
+        <select class="form-control" id="edit-followup-recurrence">${recurrenceOptions}</select>
+      </div>
+      <div class="form-group">
+        <label>Follow-up notes (optional)</label>
+        <input type="text" class="form-control" id="edit-followup-notes"
+          value="${escapeHtml(followUp?.notes || "")}" placeholder="Anything to remember">
+      </div>
+    </div>
+  `;
+}
+
+// Reads the follow-up form inside the edit modal into a plain object. Returns null when
+// the modal has no follow-up section. Must be called while the overlay is still in the DOM.
+function readFollowUpForm(overlay) {
+  const enabledEl = overlay.querySelector("#edit-followup-enabled");
+  if (!enabledEl) return null;
+  const recurring = !!overlay.querySelector("#edit-followup-recurring")?.checked;
+  return {
+    enabled: enabledEl.checked,
+    data: {
+      follow_up_type: overlay.querySelector("#edit-followup-type")?.value || "reminder",
+      title: overlay.querySelector("#edit-followup-title")?.value.trim() || null,
+      due_date: overlay.querySelector("#edit-followup-due")?.value || null,
+      is_recurring: recurring,
+      recurrence: recurring
+        ? overlay.querySelector("#edit-followup-recurrence")?.value || "monthly"
+        : null,
+      notes: overlay.querySelector("#edit-followup-notes")?.value.trim() || null,
+    },
+  };
+}
+
+// Creates, updates, or deletes the follow-up for this transaction to match the captured
+// form state (from readFollowUpForm). No-op when formState is null.
+async function persistFollowUp(txId, formState) {
+  if (!formState) return;
+  const existing = await API.getFollowUp(txId).catch(() => null);
+  if (!formState.enabled) {
+    if (existing) await API.deleteFollowUp(existing.id);
+    return;
+  }
+  if (existing) await API.updateFollowUp(existing.id, formState.data);
+  else await API.createFollowUp(txId, formState.data);
+}
+
 async function showEditTransaction(txId) {
   try {
     // Fetch the transaction
@@ -1721,6 +1935,7 @@ async function showEditTransaction(txId) {
     const tx = txList[0];
     const accounts = window._appAccounts || (await API.getAccounts(true));
     const categories = window._appCategories || (await API.getCategories());
+    const followUp = await API.getFollowUp(tx.id).catch(() => null);
 
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -1824,6 +2039,7 @@ async function showEditTransaction(txId) {
           <div id="edit-tx-tag-chips" class="tag-chips-container">${(tx.tags || []).map((t) => `<span class="tag-chip" data-tag-id="${t.id}" data-tag-name="${escapeHtml(t.name)}">#${escapeHtml(t.name)}<button class="tag-chip-remove" data-action="remove-tag-chip" title="Remove">×</button></span>`).join("")}</div>
           <input type="text" class="form-control" id="edit-tx-tag-input" placeholder="Type a tag and press Enter">
         </div>
+        ${followUpFormHTML(followUp)}
         <div class="modal-actions">
           <button class="btn btn-outline" data-action="close-modal">Cancel</button>
           <button class="btn btn-primary" data-action="save-transaction" data-id="${tx.id}">Save</button>
@@ -1879,26 +2095,44 @@ async function saveTransaction(txId, btnEl) {
     merchant_upi_id: modal.dataset.origMerchantUpi || null,
   };
 
-  // Check if category changed — offer to map the merchant to the new category. A merchant
-  // rename now persists via the merchant identity automatically, so there is no separate
-  // "propagate name" prompt: the typed name is written to this transaction directly.
+  // Check if the category changed and/or the merchant was renamed. Both changes can offer
+  // to be remembered for future transactions from the same merchant. A single save may carry
+  // both prompts; both flags are sent in one API.updateTransaction call.
   const origCategoryId = Number.parseInt(modal.dataset.origCategoryId, 10) || null;
   const hasMerchant = modal.dataset.hasMerchant === "true";
   const merchantLabel = modal.dataset.merchantLabel || "this merchant";
+  const origMerchantName = modal.dataset.origMerchantName || "";
+  const newMerchantName = data.merchant_name || "";
 
   const categoryChanged = !!(newCategoryId && newCategoryId !== origCategoryId && hasMerchant);
+  const nameChanged = !!(newMerchantName && newMerchantName !== origMerchantName && hasMerchant);
 
-  if (categoryChanged) {
+  // Capture the follow-up form state before the overlay may be removed below.
+  const followUpState = readFollowUpForm(overlay);
+
+  if (categoryChanged || nameChanged) {
     overlay.remove();
-    const learn = await showMerchantLearnPrompt(merchantLabel, newCategoryId);
-    data.learn_merchant = learn;
+    let learnCategory = false;
+    let learnName = false;
+    if (categoryChanged) {
+      learnCategory = await showMerchantLearnPrompt(merchantLabel, newCategoryId);
+      data.learn_merchant = learnCategory;
+    }
+    if (nameChanged) {
+      learnName = await showMerchantRenamePrompt(merchantLabel, newMerchantName);
+      data.learn_merchant_name = learnName;
+    }
     try {
       await API.updateTransaction(txId, data);
       const tagIds = await collectTagIds("edit-tx-tag-chips");
       await API.setTransactionTags(txId, tagIds);
+      await persistFollowUp(txId, followUpState);
       Toast.success("Transaction updated");
-      if (learn) Toast.info(`Future transactions from ${merchantLabel} will be auto-categorized`);
-      if (Router.currentScreen === "#/transactions") loadTransactionList(true);
+      if (learnCategory) {
+        Toast.info(`Future transactions from ${merchantLabel} will be auto-categorized`);
+      }
+      if (learnName) Toast.info(`Future transactions will use "${newMerchantName}"`);
+      if (Router.currentScreen === "#/transactions") refreshTransactionsScreen();
       else if (Router.currentScreen === "#/") renderDashboard();
     } catch (err) {
       Toast.error(err.message);
@@ -1911,10 +2145,11 @@ async function saveTransaction(txId, btnEl) {
     await API.updateTransaction(txId, data);
     const tagIds = await collectTagIds("edit-tx-tag-chips");
     await API.setTransactionTags(txId, tagIds);
+    await persistFollowUp(txId, followUpState);
     overlay.remove();
     Toast.success("Transaction updated");
     // Refresh the current list
-    if (Router.currentScreen === "#/transactions") loadTransactionList(true);
+    if (Router.currentScreen === "#/transactions") refreshTransactionsScreen();
     else if (Router.currentScreen === "#/") renderDashboard();
   } catch (err) {
     Toast.error(err.message);
@@ -1955,6 +2190,39 @@ function showMerchantLearnPrompt(merchantLabel, categoryId) {
       resolve(true);
     };
     overlay.querySelector("#merchant-no").onclick = () => {
+      overlay.remove();
+      resolve(false);
+    };
+  });
+}
+
+/**
+ * Show a prompt asking if the renamed merchant name should be remembered for all past &
+ * future transactions from this merchant. Returns a Promise<boolean>.
+ */
+function showMerchantRenamePrompt(merchantLabel, newName) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal confirm-dialog">
+        <p style="margin-bottom:var(--space-sm);font-weight:600">Remember this merchant name?</p>
+        <p style="font-size:0.9rem;color:var(--color-text-secondary)">
+          Apply the name <strong>${escapeHtml(newName)}</strong> to all past &amp; future
+          transactions from <strong>${escapeHtml(merchantLabel)}</strong>?
+        </p>
+        <div class="modal-actions">
+          <button class="btn btn-outline" id="merchant-name-no">No, just this one</button>
+          <button class="btn btn-primary" id="merchant-name-yes">Yes, apply to all</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector("#merchant-name-yes").onclick = () => {
+      overlay.remove();
+      resolve(true);
+    };
+    overlay.querySelector("#merchant-name-no").onclick = () => {
       overlay.remove();
       resolve(false);
     };

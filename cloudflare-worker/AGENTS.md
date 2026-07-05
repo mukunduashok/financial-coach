@@ -32,13 +32,15 @@ Secrets are managed via `wrangler secret put <NAME>` — never committed to vers
 ```bash
 cd cloudflare-worker
 npx wrangler dev              # Local dev mode (uses .dev.vars for secrets)
-npx wrangler deploy           # Deploy to Cloudflare Pages
+npx wrangler deploy           # Deploy the gmail-proxy Worker to Cloudflare
 ```
 
 Or from the repo root:
 ```bash
-make deploy                   # Deploys both the worker and static site
+make deploy                   # Deploys ONLY the static Pages site (static/) — NOT the worker
 ```
+
+> **Note:** `make deploy` publishes the static Pages site only. Worker changes are **not** included — deploy the worker separately with `npx wrangler deploy` from the `cloudflare-worker/` directory.
 
 ## Testing
 
