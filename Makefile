@@ -41,8 +41,10 @@ deploy: gen-env
 	@DEPLOY_TS=$$(date -u +%Y%m%d%H%M%S) && \
 	sed -i "s/const CACHE_NAME = \"fincoach-v[^\"]*\"/const CACHE_NAME = \"fincoach-$$DEPLOY_TS\"/" static/js/sw.js && \
 	echo "Stamped CACHE_NAME: fincoach-$$DEPLOY_TS" && \
+	sed -i "s#https://your-worker.your-subdomain.workers.dev#$(GMAIL_PROXY_URL)#g" static/_headers && \
+	echo "Stamped CSP worker URL: $(GMAIL_PROXY_URL)" && \
 	npx wrangler pages deploy static --project-name=finance-coach-pro && \
-	git checkout static/js/sw.js
+	git checkout static/js/sw.js static/_headers
 
 test-e2e: clean-ports
 	npx playwright test
