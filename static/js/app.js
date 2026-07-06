@@ -20,6 +20,7 @@ import {
 import { DB } from "./db.js";
 import { GDrive } from "./gdrive.js";
 import { Gmail } from "./gmail.js";
+import { Vault } from "./vault.js";
 
 // ============================================================================
 // Utility helpers
@@ -601,6 +602,44 @@ document.addEventListener("click", (e) => {
       localStorage.removeItem(ONBOARDED_KEY);
       localStorage.removeItem(ONBOARDING_STEP_KEY);
       renderOnboardingStep(1);
+      break;
+
+    // Vault
+    case "unlock-vault":
+      doUnlockVault();
+      break;
+    case "vault-forgot-passphrase":
+      showVaultForgotModal();
+      break;
+    case "vault-setup":
+      showVaultSetupModal();
+      break;
+    case "do-setup-vault":
+      doSetupVault();
+      break;
+    case "close-vault-setup-modal":
+      document.getElementById("vault-setup-modal")?.remove();
+      break;
+    case "vault-change-passphrase":
+      showChangePassphraseModal();
+      break;
+    case "do-change-passphrase":
+      doChangePassphrase();
+      break;
+    case "close-vault-change-modal":
+      document.getElementById("vault-change-modal")?.remove();
+      break;
+    case "vault-reset":
+      showVaultForgotModal();
+      break;
+    case "do-reset-vault":
+      doResetVault();
+      break;
+    case "vault-lock":
+      doLockVault();
+      break;
+    case "close-vault-forgot-modal":
+      document.getElementById("vault-forgot-modal")?.remove();
       break;
   }
 });
@@ -2547,6 +2586,9 @@ async function connectGmail() {
     const result = await API.getGmailConnectUrl();
     if (result?.connected) {
       Toast.success("Gmail connected!");
+      if (!API.isVaultConfigured()) {
+        showVaultSetupModal();
+      }
       // Re-render whichever screen is currently active instead of always going to Sync
       const renderFn = Router.routes[Router.currentScreen];
       if (renderFn) await renderFn();
@@ -5420,6 +5462,7 @@ async function renderSettings() {
   }
 
   const backupApiKeyEnabled = localStorage.getItem(GDRIVE_BACKUP_API_KEY_KEY) === "true";
+  const vaultConfigured = Vault.isConfigured();
 
   const providerOptions = providerKeys
     .map((k) => {
@@ -5696,6 +5739,32 @@ ${
       }
     </p>
   </div>
+
+  ${
+    vaultConfigured
+      ? `
+  <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <h2>🔒 Credential Vault</h2>
+    <p class="text-muted">Your AI API keys and Gmail tokens are AES-256 encrypted.</p>
+    <div class="settings-field">
+      <span style="color:var(--color-success,#2ecc71)">&#10003; Passphrase protection active</span>
+    </div>
+    <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap;margin-top:var(--space-md,1rem)">
+      <button class="btn btn-sm" data-action="vault-change-passphrase">Change passphrase</button>
+      <button class="btn btn-sm" data-action="vault-lock">Lock now</button>
+      <button class="btn btn-sm btn-danger" data-action="vault-reset">Reset credentials</button>
+    </div>
+  </div>`
+      : `
+  <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <h2>🔒 Credential Vault</h2>
+    <p class="text-muted">
+      ⚠️ Your API keys and Gmail tokens are stored unencrypted.
+      Protect them with a passphrase.
+    </p>
+    <button class="btn btn-primary btn-sm" data-action="vault-setup">Set up passphrase protection</button>
+  </div>`
+  }
 
   <div class="card settings-section" style="margin-top: var(--space-lg)">
     <h2>Onboarding</h2>
@@ -5974,7 +6043,7 @@ function onProviderChange() {
   }
 }
 
-function saveAISettings() {
+async function saveAISettings() {
   const provider = document.getElementById("ai-provider")?.value || "";
   const apiKey = document.getElementById("ai-api-key")?.value || "";
   const model = document.getElementById("ai-model")?.value || "";
@@ -6002,7 +6071,7 @@ function saveAISettings() {
     }
   }
 
-  AI.saveSettings({
+  await AI.saveSettings({
     provider,
     apiKey,
     model,
@@ -6012,6 +6081,10 @@ function saveAISettings() {
     ollamaBaseUrl,
   });
   Toast.show("Settings saved", "success");
+
+  if (apiKey && !API.isVaultConfigured()) {
+    showVaultSetupModal();
+  }
 
   const status = document.getElementById("settings-status");
   if (status) {
@@ -6342,6 +6415,206 @@ async function checkBillNotifications() {
   } catch {
     // Silent fallback — never crash on notification errors
   }
+}
+
+document.addEventListener("vault-locked", () => {
+  renderVaultUnlock();
+});
+
+// ============================================================================
+// Vault UI functions
+// ============================================================================
+
+function renderVaultUnlock() {
+  const existing = document.getElementById("vault-unlock-screen");
+  if (existing) return;
+  const overlay = document.createElement("div");
+  overlay.id = "vault-unlock-screen";
+  overlay.className = "modal-overlay";
+  overlay.style.cssText =
+    "position:fixed;inset:0;background:var(--bg-primary,#111);z-index:9999;display:flex;align-items:center;justify-content:center";
+  overlay.innerHTML = `
+    <div class="card" style="max-width:420px;width:100%;padding:var(--space-xl,2rem)">
+      <h2 style="margin-bottom:var(--space-md,1rem)">🔒 Unlock Your Data</h2>
+      <p class="text-muted">Your credentials are protected. Enter your passphrase to continue.</p>
+      <div id="vault-unlock-error" class="alert alert-danger" style="display:none;margin-bottom:var(--space-md,1rem)"></div>
+      <div class="form-group" style="margin-bottom:var(--space-md,1rem)">
+        <label class="form-label">Passphrase</label>
+        <input type="password" id="vault-unlock-passphrase" class="form-control"
+               placeholder="Enter passphrase" autocomplete="current-password">
+      </div>
+      <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap">
+        <button class="btn btn-primary" data-action="unlock-vault">Unlock</button>
+        <button class="btn btn-link" data-action="vault-forgot-passphrase" style="margin-left:auto">Forgot passphrase?</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#vault-unlock-passphrase").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doUnlockVault();
+  });
+}
+
+async function doUnlockVault() {
+  const input = document.getElementById("vault-unlock-passphrase");
+  const errEl = document.getElementById("vault-unlock-error");
+  if (!input) return;
+  const passphrase = input.value.trim();
+  if (!passphrase) {
+    errEl.textContent = "Please enter your passphrase.";
+    errEl.style.display = "";
+    return;
+  }
+  try {
+    const ok = await API.unlockVault(passphrase);
+    if (ok) {
+      const overlay = document.getElementById("vault-unlock-screen");
+      if (overlay) overlay.remove();
+      document.dispatchEvent(new Event("db-ready"));
+    } else {
+      errEl.textContent = "Incorrect passphrase. Please try again.";
+      errEl.style.display = "";
+      input.value = "";
+      input.focus();
+    }
+  } catch (err) {
+    errEl.textContent = `Unlock failed: ${err.message}`;
+    errEl.style.display = "";
+  }
+}
+
+function showVaultForgotModal() {
+  const html = `
+    <div id="vault-forgot-modal" class="modal-overlay" style="z-index:10000">
+      <div class="modal">
+        <h3>Reset Credentials</h3>
+        <p>Your <strong>financial data is safe</strong> — only your AI API keys and Gmail connection will be cleared.</p>
+        <p>You will need to re-enter your API keys and reconnect Gmail after resetting.</p>
+        <div class="modal-actions">
+          <button class="btn btn-danger" data-action="do-reset-vault">Clear credentials &amp; continue</button>
+          <button class="btn btn-secondary" data-action="close-vault-forgot-modal">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+
+function showVaultSetupModal() {
+  const html = `
+    <div id="vault-setup-modal" class="modal-overlay" style="z-index:10000">
+      <div class="modal">
+        <h3>🔒 Protect Your Credentials</h3>
+        <p>Encrypt your AI API keys and Gmail tokens with a passphrase so they are never stored in plaintext.</p>
+        <p class="text-muted">If you forget the passphrase, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
+        <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <div class="form-group">
+          <label class="form-label">Passphrase <span class="text-muted">(min 8 characters)</span></label>
+          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a passphrase" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm passphrase</label>
+          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat passphrase" autocomplete="new-password">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" data-action="do-setup-vault">Set passphrase</button>
+          <button class="btn btn-secondary" data-action="close-vault-setup-modal">Skip for now</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+
+async function doSetupVault() {
+  const passphrase = document.getElementById("vault-setup-passphrase")?.value || "";
+  const confirm = document.getElementById("vault-setup-confirm")?.value || "";
+  const errEl = document.getElementById("vault-setup-error");
+  if (passphrase.length < 8) {
+    errEl.textContent = "Passphrase must be at least 8 characters.";
+    errEl.style.display = "";
+    return;
+  }
+  if (passphrase !== confirm) {
+    errEl.textContent = "Passphrases do not match.";
+    errEl.style.display = "";
+    return;
+  }
+  try {
+    await API.setupVault(passphrase);
+    document.getElementById("vault-setup-modal")?.remove();
+    showToast("Credentials are now encrypted.", "success");
+    if (window.location.hash.startsWith("#/settings")) await renderSettings();
+  } catch (err) {
+    errEl.textContent = `Failed to set up vault: ${err.message}`;
+    errEl.style.display = "";
+  }
+}
+
+function showChangePassphraseModal() {
+  const html = `
+    <div id="vault-change-modal" class="modal-overlay" style="z-index:10000">
+      <div class="modal">
+        <h3>Change Passphrase</h3>
+        <div id="vault-change-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <div class="form-group">
+          <label class="form-label">Current passphrase</label>
+          <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">New passphrase <span class="text-muted">(min 8 characters)</span></label>
+          <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm new passphrase</label>
+          <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" data-action="do-change-passphrase">Update passphrase</button>
+          <button class="btn btn-secondary" data-action="close-vault-change-modal">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+
+async function doChangePassphrase() {
+  const oldP = document.getElementById("vault-change-old")?.value || "";
+  const newP = document.getElementById("vault-change-new")?.value || "";
+  const confirmP = document.getElementById("vault-change-confirm")?.value || "";
+  const errEl = document.getElementById("vault-change-error");
+  if (newP.length < 8) {
+    errEl.textContent = "New passphrase must be at least 8 characters.";
+    errEl.style.display = "";
+    return;
+  }
+  if (newP !== confirmP) {
+    errEl.textContent = "New passphrases do not match.";
+    errEl.style.display = "";
+    return;
+  }
+  try {
+    await API.changeVaultPassphrase(oldP, newP);
+    document.getElementById("vault-change-modal")?.remove();
+    showToast("Passphrase updated.", "success");
+  } catch (err) {
+    errEl.textContent = err.message || "Failed to change passphrase.";
+    errEl.style.display = "";
+  }
+}
+
+async function doResetVault() {
+  API.resetVault();
+  document.getElementById("vault-forgot-modal")?.remove();
+  const overlay = document.getElementById("vault-unlock-screen");
+  if (overlay) {
+    overlay.remove();
+    document.dispatchEvent(new Event("db-ready"));
+  }
+  showToast("Credentials cleared. Please re-enter your API keys and reconnect Gmail.", "warning");
+  if (window.location.hash.startsWith("#/settings")) await renderSettings();
+}
+
+function doLockVault() {
+  API.lockVault();
+  window.location.reload();
 }
 
 document.addEventListener("db-ready", () => {

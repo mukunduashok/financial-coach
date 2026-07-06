@@ -266,8 +266,8 @@ describe("Settings Edge Cases", () => {
     expect(s.model).toBe("m2");
   });
 
-  it("saves only known fields (extra fields stripped)", () => {
-    AI.saveSettings({ provider: "groq", apiKey: "k", model: "m", extra: "ignored" });
+  it("saves only known fields (extra fields stripped)", async () => {
+    await AI.saveSettings({ provider: "groq", apiKey: "k", model: "m", extra: "ignored" });
     const raw = JSON.parse(localStore["fincoach-ai-settings"]);
     expect(raw).not.toHaveProperty("extra");
     expect(Object.keys(raw)).toEqual([

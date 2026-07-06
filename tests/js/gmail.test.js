@@ -41,6 +41,19 @@ vi.mock("../../static/js/config.js", () => ({
 	GMAIL_AUTO_SYNC_ENABLED_KEY: "fincoach-gmail-auto-sync-enabled",
 	GMAIL_AUTO_SYNC_LAST_KEY: "fincoach-gmail-auto-sync-last",
 	GMAIL_AUTO_SYNC_INTERVAL_MS: 900_000, // 15 minutes
+	VAULT_SALT_KEY: "fincoach-vault-salt",
+	VAULT_SENTINEL_KEY: "fincoach-vault-sentinel",
+	VAULT_AI_KEY: "fincoach-vault-ai",
+	VAULT_GMAIL_KEY: "fincoach-vault-gmail",
+}));
+
+// Mock vault.js — simulate vault not configured so plaintext path is taken
+vi.mock("../../static/js/vault.js", () => ({
+	Vault: {
+		isConfigured: vi.fn(() => false),
+		isUnlocked: vi.fn(() => false),
+		saveGmailSettings: vi.fn(),
+	},
 }));
 
 // Now import Gmail (after DB is available)
@@ -76,6 +89,7 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   globalThis.fetch = originalFetch;
   globalThis.open = originalOpen;
+  Gmail.clearDecrypted();
   await freshDB();
 });
 
@@ -94,15 +108,15 @@ describe("Gmail Settings", () => {
     expect(s).toEqual({});
   });
 
-  it("saves and loads settings", () => {
-    Gmail.saveSettings({ accessToken: "tok123" });
+  it("saves and loads settings", async () => {
+    await Gmail.saveSettings({ accessToken: "tok123" });
     const s = Gmail.getSettings();
     expect(s.accessToken).toBe("tok123");
   });
 
-  it("merges settings without overwriting existing keys", () => {
-    Gmail.saveSettings({ accessToken: "tok123" });
-    Gmail.saveSettings({ refreshToken: "ref456" });
+  it("merges settings without overwriting existing keys", async () => {
+    await Gmail.saveSettings({ accessToken: "tok123" });
+    await Gmail.saveSettings({ refreshToken: "ref456" });
     const s = Gmail.getSettings();
     expect(s.accessToken).toBe("tok123");
     expect(s.refreshToken).toBe("ref456");
@@ -117,16 +131,16 @@ describe("Gmail OAuth", () => {
     expect(Gmail.isConnected()).toBe(false);
   });
 
-  it("isConnected returns true when tokens present", () => {
-    Gmail.saveSettings({
+  it("isConnected returns true when tokens present", async () => {
+    await Gmail.saveSettings({
       accessToken: "access",
       refreshToken: "refresh",
     });
     expect(Gmail.isConnected()).toBe(true);
   });
 
-  it("disconnect clears all tokens", () => {
-    Gmail.saveSettings({
+  it("disconnect clears all tokens", async () => {
+    await Gmail.saveSettings({
       accessToken: "access",
       refreshToken: "refresh",
     });
@@ -851,7 +865,7 @@ describe("Import Transaction — stored merchant display name", () => {
 // ===========================================================================
 describe("Token Management", () => {
   it("_getValidToken returns token when not expired", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "valid-token",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -865,7 +879,7 @@ describe("Token Management", () => {
   });
 
   it("_getValidToken refreshes when token is expired", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "old-token",
       refreshToken: "ref-tok",
       tokenExpiry: Date.now() - 1000, // already expired
@@ -882,7 +896,7 @@ describe("Token Management", () => {
   });
 
   it("_getValidToken refreshes when token expires within 60 seconds", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "old-token",
       refreshToken: "ref-tok",
       tokenExpiry: Date.now() + 30000, // 30 seconds from now (within 60s buffer)
@@ -899,12 +913,12 @@ describe("Token Management", () => {
   });
 
   it("_refreshToken throws when no refresh token", async () => {
-    Gmail.saveSettings({ accessToken: "tok" });
+    await Gmail.saveSettings({ accessToken: "tok" });
     await expect(Gmail._refreshToken()).rejects.toThrow("No refresh token available");
   });
 
   it("_refreshToken disconnects on 401 response", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "old",
       refreshToken: "expired-ref",
     });
@@ -919,7 +933,7 @@ describe("Token Management", () => {
   });
 
   it("_refreshToken throws generic error on other failures", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       refreshToken: "ref",
     });
 
@@ -1473,7 +1487,7 @@ describe("Merchant Rename Memory — Gmail import path (FINCO-50)", () => {
 // ===========================================================================
 describe("extractTransactions pipeline", () => {
   it("returns zero results when no new emails found", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "tok",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -1492,7 +1506,7 @@ describe("extractTransactions pipeline", () => {
   });
 
   it("processes emails through full pipeline with mocked LLM", async () => {
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "tok",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -1586,7 +1600,7 @@ describe("extractTransactions pipeline", () => {
     // Pre-save a processed ID
     await DB.saveProcessedGmailIds(["already_processed"]);
 
-    Gmail.saveSettings({
+    await Gmail.saveSettings({
       accessToken: "tok",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -2355,8 +2369,8 @@ describe("_categorizeWithHeuristics", () => {
 // 24. extractTransactions — heuristic path
 // ===========================================================================
 describe("extractTransactions — heuristic path", () => {
-  function setupGmailConnection() {
-    Gmail.saveSettings({
+  async function setupGmailConnection() {
+    await Gmail.saveSettings({
       accessToken: "tok",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -2384,7 +2398,7 @@ describe("extractTransactions — heuristic path", () => {
   }
 
   it("calls _extractWithRegex when AI not configured", async () => {
-    setupGmailConnection();
+    await setupGmailConnection();
     const spy = vi.spyOn(Gmail, "_extractWithRegex").mockReturnValue({
       amount: -500,
       transaction_type: "expense",
@@ -2407,7 +2421,7 @@ describe("extractTransactions — heuristic path", () => {
   });
 
   it("does not call _callLLM when AI not configured", async () => {
-    setupGmailConnection();
+    await setupGmailConnection();
     const spy = vi.spyOn(Gmail, "_callLLM");
     vi.spyOn(Gmail, "_extractWithRegex").mockReturnValue({
       amount: -100,
@@ -2431,7 +2445,7 @@ describe("extractTransactions — heuristic path", () => {
   });
 
   it("heuristic_mode is true in result when no AI configured", async () => {
-    setupGmailConnection();
+    await setupGmailConnection();
     vi.spyOn(Gmail, "_extractWithRegex").mockReturnValue({
       amount: -100,
       transaction_type: "expense",
@@ -2454,7 +2468,7 @@ describe("extractTransactions — heuristic path", () => {
   });
 
   it("increments errors count when regex returns null", async () => {
-    setupGmailConnection();
+    await setupGmailConnection();
     mockEmailFetch("msg_h4", unparseableRaw);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await Gmail.extractTransactions({ days: 7 });
@@ -2463,7 +2477,7 @@ describe("extractTransactions — heuristic path", () => {
   });
 
   it("calls _callLLM when AI is configured", async () => {
-    setupGmailConnection();
+    await setupGmailConnection();
     localStorageData["fincoach-ai-settings"] = JSON.stringify({
       provider: "groq",
       apiKey: "test-key",
@@ -2480,8 +2494,8 @@ describe("extractTransactions — heuristic path", () => {
 // 25. Custom sender filtering in searchEmails query
 // ===========================================================================
 describe("custom sender filtering in query", () => {
-  function setupGmailConnection() {
-    Gmail.saveSettings({
+  async function setupGmailConnection() {
+    await Gmail.saveSettings({
       accessToken: "tok",
       refreshToken: "ref",
       tokenExpiry: Date.now() + 3600000,
@@ -2505,8 +2519,8 @@ describe("custom sender filtering in query", () => {
     return url.searchParams.get("q");
   }
 
-  beforeEach(() => {
-    setupGmailConnection();
+  beforeEach(async () => {
+    await setupGmailConnection();
   });
 
   it("no custom senders → query contains BANK_DOMAINS wildcard patterns", async () => {
@@ -2616,7 +2630,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("does nothing when last sync is within the 15-minute cooldown", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		// 800_000 ms ago (13 min) — still within the 15-minute cooldown window
 		localStorageData["fincoach-gmail-auto-sync-last"] = String(Date.now() - 800_000);
 		const spy = vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 0 });
@@ -2626,7 +2640,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("calls extractTransactions with correct args when all guards pass", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		// No GMAIL_AUTO_SYNC_LAST_KEY → cooldown not active
 		const spy = vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 0 });
 		await Gmail.maybeAutoSync();
@@ -2635,7 +2649,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("updates GMAIL_AUTO_SYNC_LAST_KEY in localStorage after sync", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 0 });
 		const before = Date.now();
 		await Gmail.maybeAutoSync();
@@ -2645,7 +2659,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("dispatches gmail-auto-sync-complete CustomEvent with imported count when imported > 0", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 3 });
 		let capturedDetail = null;
 		document.addEventListener(
@@ -2661,7 +2675,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("does not dispatch gmail-auto-sync-complete when imported is 0", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 0 });
 		let fired = false;
 		document.addEventListener("gmail-auto-sync-complete", () => {
@@ -2673,7 +2687,7 @@ describe("Gmail.maybeAutoSync", () => {
 
 	it("never throws even when extractTransactions rejects", async () => {
 		localStorageData["fincoach-gmail-auto-sync-enabled"] = "true";
-		Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
+		await Gmail.saveSettings({ accessToken: "tok", refreshToken: "ref" });
 		vi.spyOn(Gmail, "extractTransactions").mockRejectedValue(new Error("network error"));
 		await expect(Gmail.maybeAutoSync()).resolves.toBeUndefined();
 	});
@@ -2689,7 +2703,7 @@ describe("Gmail.maybeAutoSync — event dispatching", () => {
 	}
 
 	it("dispatches gmail-sync-start before calling extractTransactions", async () => {
-		setupConnected();
+		await setupConnected();
 		let startFiredBeforeExtract = false;
 		vi.spyOn(Gmail, "extractTransactions").mockImplementation(async () => {
 			startFiredBeforeExtract = startFiredBeforeMark;
@@ -2702,7 +2716,7 @@ describe("Gmail.maybeAutoSync — event dispatching", () => {
 	});
 
 	it("dispatches gmail-sync-end with imported count and null error on success", async () => {
-		setupConnected();
+		await setupConnected();
 		vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 3 });
 		let endDetail = null;
 		document.addEventListener("gmail-sync-end", (e) => { endDetail = e.detail; }, { once: true });
@@ -2711,7 +2725,7 @@ describe("Gmail.maybeAutoSync — event dispatching", () => {
 	});
 
 	it("dispatches gmail-sync-end with error message and imported=0 on failure", async () => {
-		setupConnected();
+		await setupConnected();
 		vi.spyOn(Gmail, "extractTransactions").mockRejectedValue(new Error("network error"));
 		let endDetail = null;
 		document.addEventListener("gmail-sync-end", (e) => { endDetail = e.detail; }, { once: true });
@@ -2720,13 +2734,13 @@ describe("Gmail.maybeAutoSync — event dispatching", () => {
 	});
 
 	it("does not throw when extractTransactions rejects — error is swallowed", async () => {
-		setupConnected();
+		await setupConnected();
 		vi.spyOn(Gmail, "extractTransactions").mockRejectedValue(new Error("network error"));
 		await expect(Gmail.maybeAutoSync()).resolves.toBeUndefined();
 	});
 
 	it("respects 15-minute cooldown — does not dispatch gmail-sync-start when last sync was 13 min ago", async () => {
-		setupConnected();
+		await setupConnected();
 		// 800_000 ms = ~13 min ago — within the 900_000 ms (15 min) cooldown
 		localStorageData["fincoach-gmail-auto-sync-last"] = String(Date.now() - 800_000);
 		let started = false;
@@ -2736,7 +2750,7 @@ describe("Gmail.maybeAutoSync — event dispatching", () => {
 	});
 
 	it("dispatches gmail-sync-start after cooldown passes — last sync was 16+ min ago", async () => {
-		setupConnected();
+		await setupConnected();
 		// 1_000_000 ms = ~16.7 min ago — past the 900_000 ms (15 min) cooldown
 		localStorageData["fincoach-gmail-auto-sync-last"] = String(Date.now() - 1_000_000);
 		vi.spyOn(Gmail, "extractTransactions").mockResolvedValue({ imported: 0 });
@@ -2756,20 +2770,20 @@ describe("getAccountSub", () => {
 		expect(Gmail.getAccountSub()).toBe("");
 	});
 
-	it("returns the cached sub from settings", () => {
-		Gmail.saveSettings({ sub: "google-sub-12345" });
+	it("returns the cached sub from settings", async () => {
+		await Gmail.saveSettings({ sub: "google-sub-12345" });
 		expect(Gmail.getAccountSub()).toBe("google-sub-12345");
 	});
 
-	it("returns empty string when settings exist but sub is absent", () => {
-		Gmail.saveSettings({ accessToken: "tok", email: "user@example.com" });
+	it("returns empty string when settings exist but sub is absent", async () => {
+		await Gmail.saveSettings({ accessToken: "tok", email: "user@example.com" });
 		expect(Gmail.getAccountSub()).toBe("");
 	});
 });
 
 describe("_fetchAndStoreSub", () => {
 	it("calls the userinfo endpoint with the bearer token", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2791,7 +2805,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("saves the sub to Gmail settings on a successful response", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2808,7 +2822,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("does not update settings when the response is not ok", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2825,7 +2839,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("does not save sub when data.sub is absent in the response", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2842,7 +2856,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("swallows errors silently so it is safe to call fire-and-forget", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2854,7 +2868,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("saves both sub and email when userinfo returns an email", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -2873,7 +2887,7 @@ describe("_fetchAndStoreSub", () => {
 	});
 
 	it("saves sub but not email when userinfo omits email field", async () => {
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "valid-tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,
@@ -3108,7 +3122,7 @@ describe("BUG-GMAIL-SIP: Gmail message ID bypasses field-based duplicate check",
 		// Simulate 3 separate SIP confirmation emails arriving on the same day
 		// with the same debit amount but distinct Gmail message IDs.
 		// This is the end-to-end pipeline test for the BUG-GMAIL-SIP fix.
-		Gmail.saveSettings({
+		await Gmail.saveSettings({
 			accessToken: "tok",
 			refreshToken: "ref",
 			tokenExpiry: Date.now() + 3_600_000,

@@ -9,6 +9,7 @@ import {
   SESSION_LAST_ACTIVITY_KEY,
   TRUSTED_DEVICE_KEY,
 } from "./config.js";
+import { Vault } from "./vault.js";
 
 function _handleOAuthCallback() {
   const search = new URLSearchParams(window.location.search);
@@ -56,7 +57,12 @@ async function boot() {
     }
 
     await DB.init();
-    document.dispatchEvent(new Event("db-ready"));
+
+    if (Vault.isConfigured()) {
+      document.dispatchEvent(new Event("vault-locked"));
+    } else {
+      document.dispatchEvent(new Event("db-ready"));
+    }
   } catch (err) {
     const app = document.getElementById("app");
     if (app) {

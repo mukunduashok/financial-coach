@@ -3,10 +3,11 @@
  * No business logic here — only routing calls to the right module.
  */
 import { AI } from "./ai.js";
-import { GMAIL_CUSTOM_SENDERS_KEY } from "./config.js";
+import { AI_SETTINGS_KEY, GMAIL_CUSTOM_SENDERS_KEY, GMAIL_SETTINGS_KEY } from "./config.js";
 import { DB } from "./db.js";
 import { Gmail } from "./gmail.js";
 import { validateGmailSender } from "./utils.js";
+import { Vault } from "./vault.js";
 
 export const API = {
   // ---- Accounts ----
@@ -261,6 +262,76 @@ export const API = {
   // ---- Dev / Testing ----
   loadSampleData() {
     return DB.loadSampleData();
+  },
+
+  // ---- Vault ----
+  isVaultConfigured() {
+    return Vault.isConfigured();
+  },
+  isVaultUnlocked() {
+    return Vault.isUnlocked();
+  },
+  async unlockVault(passphrase) {
+    const ok = await Vault.unlock(passphrase);
+    if (!ok) return false;
+
+    // Populate in-memory caches
+    const aiSettings = await Vault.loadAISettings();
+    if (aiSettings) AI.setDecrypted(aiSettings);
+
+    const gmailSettings = await Vault.loadGmailSettings();
+    if (gmailSettings) Gmail.setDecrypted(gmailSettings);
+
+    // Migrate OAuth redirect tokens that landed in plaintext localStorage
+    // (iOS PWA redirect flow writes there before vault check runs)
+    const plaintextGmail = localStorage.getItem(GMAIL_SETTINGS_KEY);
+    if (plaintextGmail) {
+      try {
+        const tempTokens = JSON.parse(plaintextGmail);
+        const merged = { ...(gmailSettings || {}), ...tempTokens };
+        await Vault.saveGmailSettings(merged);
+        Gmail.setDecrypted(merged);
+      } catch {
+        /* ignore corrupt temp data */
+      }
+    }
+
+    return true;
+  },
+  async setupVault(passphrase) {
+    // Capture existing plaintext credentials before encrypting
+    const aiSettings = AI.getSettings();
+    const gmailSettings = Gmail.getSettings();
+
+    await Vault.setup(passphrase);
+
+    // Migrate existing plaintext AI credentials into vault
+    if (aiSettings.provider || aiSettings.apiKey) {
+      await Vault.saveAISettings(aiSettings);
+      AI.setDecrypted(aiSettings);
+    }
+
+    // Migrate existing plaintext Gmail credentials into vault
+    if (gmailSettings.accessToken || gmailSettings.refreshToken) {
+      await Vault.saveGmailSettings(gmailSettings);
+      Gmail.setDecrypted(gmailSettings);
+      localStorage.removeItem(GMAIL_SETTINGS_KEY);
+    }
+  },
+  lockVault() {
+    Vault.lock();
+    AI.clearDecrypted();
+    Gmail.clearDecrypted();
+  },
+  resetVault() {
+    Vault.clearCredentials();
+    AI.clearDecrypted();
+    Gmail.clearDecrypted();
+    localStorage.removeItem(AI_SETTINGS_KEY);
+    localStorage.removeItem(GMAIL_SETTINGS_KEY);
+  },
+  async changeVaultPassphrase(oldPassphrase, newPassphrase) {
+    await Vault.changePassphrase(oldPassphrase, newPassphrase);
   },
 };
 

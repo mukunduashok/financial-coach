@@ -28,6 +28,11 @@ export const GMAIL_SETTINGS_KEY = "fincoach-gmail-settings";
 export const GMAIL_CUSTOM_SENDERS_KEY = "fincoach-gmail-custom-senders";
 export const AI_SETTINGS_KEY = "fincoach-ai-settings";
 
+export const VAULT_SALT_KEY = "fincoach-vault-salt";
+export const VAULT_SENTINEL_KEY = "fincoach-vault-sentinel";
+export const VAULT_AI_KEY = "fincoach-vault-ai";
+export const VAULT_GMAIL_KEY = "fincoach-vault-gmail";
+
 export const SESSION_LAST_ACTIVITY_KEY = "fincoach-session-last-activity";
 export const TRUSTED_DEVICE_KEY = "fincoach-trusted-device";
 export const SESSION_EXPIRY_MS = 6 * 60 * 60 * 1000; // 21_600_000

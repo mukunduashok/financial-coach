@@ -40,6 +40,15 @@ const mockDB = {
 // Mock the db.js module
 vi.mock("../../static/js/db.js", () => ({ DB: mockDB }));
 
+// Mock vault.js — simulate vault not configured
+vi.mock("../../static/js/vault.js", () => ({
+  Vault: {
+    isConfigured: vi.fn(() => false),
+    isUnlocked: vi.fn(() => false),
+    saveAISettings: vi.fn(),
+  },
+}));
+
 // Mock fetch globally
 globalThis.fetch = vi.fn();
 
@@ -51,6 +60,7 @@ const { AI, AI_PROVIDERS } = await import("../../static/js/ai.js");
 // ---------------------------------------------------------------------------
 function clearLocalStore() {
   for (const k of Object.keys(localStore)) delete localStore[k];
+  AI.clearDecrypted();
 }
 
 function mockFetchSuccess(content = "Hello! How can I help?") {
@@ -931,5 +941,63 @@ describe("Chat — Heuristic Mode (no provider)", () => {
     mockFetchSuccess("Here is my advice...");
     const result = await AI.chat("How am I doing?");
     expect(result.model_used).not.toBe("heuristic");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Vault / _decrypted cache
+// ---------------------------------------------------------------------------
+import { Vault } from "../../static/js/vault.js";
+
+describe("Vault / _decrypted cache", () => {
+  beforeEach(() => {
+    clearLocalStore();
+    Vault.isConfigured.mockReturnValue(false);
+    Vault.isUnlocked.mockReturnValue(false);
+  });
+
+  it("setDecrypted(settings) → getSettings() returns those settings instead of localStorage", () => {
+    localStore["fincoach-ai-settings"] = JSON.stringify({ provider: "openai", apiKey: "from-ls" });
+    AI.setDecrypted({ provider: "groq", apiKey: "from-vault", model: "llama-3.3-70b-versatile",
+      azureResourceName: "", azureDeploymentName: "", azureApiVersion: "", ollamaBaseUrl: "" });
+    const s = AI.getSettings();
+    expect(s.provider).toBe("groq");
+    expect(s.apiKey).toBe("from-vault");
+  });
+
+  it("clearDecrypted() → getSettings() reads from localStorage again", () => {
+    AI.setDecrypted({ provider: "groq", apiKey: "from-vault", model: "",
+      azureResourceName: "", azureDeploymentName: "", azureApiVersion: "", ollamaBaseUrl: "" });
+    localStore["fincoach-ai-settings"] = JSON.stringify({ provider: "openai", apiKey: "from-ls" });
+    AI.clearDecrypted();
+    const s = AI.getSettings();
+    expect(s.provider).toBe("openai");
+    expect(s.apiKey).toBe("from-ls");
+  });
+
+  it("saveSettings() returns a Promise (is async)", () => {
+    const result = AI.saveSettings({ provider: "groq", apiKey: "k", model: "m" });
+    expect(result).toBeInstanceOf(Promise);
+  });
+
+  it("saveSettings() when vault not configured → writes to localStorage", async () => {
+    Vault.isConfigured.mockReturnValue(false);
+    await AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    const raw = localStore["fincoach-ai-settings"];
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw);
+    expect(parsed.provider).toBe("groq");
+    expect(parsed.apiKey).toBe("sk-test");
+  });
+
+  it("saveSettings() when vault is configured+unlocked → calls Vault.saveAISettings()", async () => {
+    Vault.isConfigured.mockReturnValue(true);
+    Vault.isUnlocked.mockReturnValue(true);
+    Vault.saveAISettings.mockResolvedValue(undefined);
+    await AI.saveSettings({ provider: "groq", apiKey: "sk-vault" });
+    expect(Vault.saveAISettings).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "groq", apiKey: "sk-vault" }),
+    );
+    expect(localStore["fincoach-ai-settings"]).toBeUndefined();
   });
 });

@@ -241,7 +241,18 @@ export const AI = {
   // ========================================================================
   // Settings
   // ========================================================================
+  _decrypted: null,
+
+  setDecrypted(settings) {
+    this._decrypted = settings ? { ...settings } : null;
+  },
+
+  clearDecrypted() {
+    this._decrypted = null;
+  },
+
   getSettings() {
+    if (this._decrypted) return { ...this._decrypted };
     try {
       const raw = localStorage.getItem(AI_SETTINGS_KEY);
       if (raw) {
@@ -270,19 +281,31 @@ export const AI = {
     };
   },
 
-  saveSettings(settings) {
-    localStorage.setItem(
-      AI_SETTINGS_KEY,
-      JSON.stringify({
-        provider: settings.provider || null,
-        apiKey: settings.apiKey || "",
-        model: settings.model || "",
-        azureResourceName: settings.azureResourceName || "",
-        azureDeploymentName: settings.azureDeploymentName || "",
-        azureApiVersion: settings.azureApiVersion || "",
-        ollamaBaseUrl: settings.ollamaBaseUrl || "",
-      }),
-    );
+  async saveSettings(settings) {
+    const normalized = {
+      provider: settings.provider || null,
+      apiKey: settings.apiKey || "",
+      model: settings.model || "",
+      azureResourceName: settings.azureResourceName || "",
+      azureDeploymentName: settings.azureDeploymentName || "",
+      azureApiVersion: settings.azureApiVersion || "",
+      ollamaBaseUrl: settings.ollamaBaseUrl || "",
+    };
+    // Persist to localStorage synchronously so callers that do not await this
+    // method still get updated settings via getSettings() → localStorage fallback.
+    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(normalized));
+
+    const { Vault } = await import("./vault.js");
+    if (Vault.isConfigured() && Vault.isUnlocked()) {
+      this._decrypted = { ...normalized };
+      await Vault.saveAISettings(normalized);
+      // Vault is the source of truth — remove plaintext copy from localStorage.
+      localStorage.removeItem(AI_SETTINGS_KEY);
+      return;
+    }
+    // Plaintext path: localStorage is the source of truth; clear in-memory cache
+    // so getSettings() always reads fresh data from localStorage.
+    this._decrypted = null;
   },
 
   // ========================================================================

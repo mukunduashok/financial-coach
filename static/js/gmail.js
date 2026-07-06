@@ -13,6 +13,7 @@ import {
   GMAIL_CUSTOM_SENDERS_KEY,
   GMAIL_PROXY_URL,
   GMAIL_SETTINGS_KEY,
+  VAULT_GMAIL_KEY,
 } from "./config.js";
 import { DB } from "./db.js";
 import { fetchWithTimeout, maskPII, validateGmailSender } from "./utils.js";
@@ -126,7 +127,18 @@ export const Gmail = {
   // ==========================================================================
   // Settings
   // ==========================================================================
+  _decrypted: null,
+
+  setDecrypted(settings) {
+    this._decrypted = settings ? { ...settings } : null;
+  },
+
+  clearDecrypted() {
+    this._decrypted = null;
+  },
+
   getSettings() {
+    if (this._decrypted) return { ...this._decrypted };
     try {
       const raw = localStorage.getItem(GMAIL_SETTINGS_KEY);
       if (raw) return JSON.parse(raw);
@@ -136,9 +148,20 @@ export const Gmail = {
     return {};
   },
 
-  saveSettings(settings) {
-    const current = this.getSettings();
+  async saveSettings(settings) {
+    // Merge and cache in-memory synchronously (before the async vault import) so
+    // that callers which do not await this method still see updated settings via
+    // getSettings() → _decrypted.
+    const current = this._decrypted || this.getSettings();
     const merged = { ...current, ...settings };
+    this._decrypted = merged;
+
+    const { Vault } = await import("./vault.js");
+    if (Vault.isConfigured() && Vault.isUnlocked()) {
+      await Vault.saveGmailSettings(merged);
+      return;
+    }
+    // Plaintext path: persist to localStorage.
     localStorage.setItem(GMAIL_SETTINGS_KEY, JSON.stringify(merged));
   },
 
@@ -179,14 +202,14 @@ export const Gmail = {
         return;
       }
 
-      function onMessage(event) {
+      async function onMessage(event) {
         if (event.origin !== new URL(GMAIL_PROXY_URL).origin) return;
         if (event.data?.type !== "gmail-oauth") return;
         cleanup();
 
         if (event.data.status === "success") {
           const tokenExpiry = Date.now() + (event.data.expires_in || 3600) * 1000;
-          Gmail.saveSettings({
+          await Gmail.saveSettings({
             accessToken: event.data.access_token,
             refreshToken: event.data.refresh_token,
             tokenExpiry,
@@ -251,7 +274,7 @@ export const Gmail = {
 
     const data = await resp.json();
     const tokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
-    this.saveSettings({ accessToken: data.access_token, tokenExpiry });
+    await this.saveSettings({ accessToken: data.access_token, tokenExpiry });
     return data.access_token;
   },
 
@@ -268,6 +291,8 @@ export const Gmail = {
 
   disconnect() {
     localStorage.removeItem(GMAIL_SETTINGS_KEY);
+    localStorage.removeItem(VAULT_GMAIL_KEY);
+    this.clearDecrypted();
   },
 
   async _fetchAndStoreSub() {
@@ -281,7 +306,7 @@ export const Gmail = {
       if (data.sub) {
         const update = { sub: data.sub };
         if (data.email) update.email = data.email;
-        this.saveSettings(update);
+        await this.saveSettings(update);
       }
     } catch {
       // Non-critical — sub fetch failure should not break anything
