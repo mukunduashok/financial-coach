@@ -1254,7 +1254,7 @@ const txFilterState = {
   transaction_type: "",
   account_id: "",
   category_id: "",
-  include_merged: true,
+  show_merged_accounts: false,
   tag_ids: [],
 };
 
@@ -1313,7 +1313,7 @@ async function renderTransactions() {
           </select>
           <select class="form-control" id="f-account">
             <option value="">All Accounts</option>
-            ${accounts.map((a) => `<option value="${a.id}" ${txFilterState.account_id === a.id ? "selected" : ""}>${escapeHtml(a.name)}${a.merged_into_id ? " (merged)" : ""}</option>`).join("")}
+            ${(txFilterState.show_merged_accounts ? accounts : accounts.filter((a) => !a.merged_into_id)).map((a) => `<option value="${a.id}" ${txFilterState.account_id === String(a.id) ? "selected" : ""}>${escapeHtml(a.name)}${txFilterState.show_merged_accounts && a.merged_into_id ? " (merged)" : ""}</option>`).join("")}
           </select>
           <select class="form-control" id="f-category">
             <option value="">All Categories</option>
@@ -1347,9 +1347,9 @@ async function renderTransactions() {
             : ""
         }
         <div class="filter-toggle">
-          <span>Include merged</span>
+          <span>Show merged accounts</span>
           <label class="toggle-switch">
-            <input type="checkbox" id="f-merged" ${txFilterState.include_merged ? "checked" : ""}>
+            <input type="checkbox" id="f-merged" ${txFilterState.show_merged_accounts ? "checked" : ""}>
             <span class="toggle-slider"></span>
           </label>
         </div>
@@ -1366,9 +1366,35 @@ async function renderTransactions() {
       txFilterState.date_from = document.getElementById("f-from").value;
       txFilterState.date_to = document.getElementById("f-to").value;
       txFilterState.transaction_type = document.getElementById("f-type").value;
-      txFilterState.account_id = document.getElementById("f-account").value;
       txFilterState.category_id = document.getElementById("f-category").value;
-      txFilterState.include_merged = document.getElementById("f-merged").checked;
+      const prevShowMerged = txFilterState.show_merged_accounts;
+      txFilterState.show_merged_accounts = document.getElementById("f-merged").checked;
+      // Rebuild account dropdown options when toggle changes
+      if (txFilterState.show_merged_accounts !== prevShowMerged) {
+        const accountSel = document.getElementById("f-account");
+        if (accountSel) {
+          const filteredAccounts = txFilterState.show_merged_accounts
+            ? accounts
+            : accounts.filter((a) => !a.merged_into_id);
+          const prevAccountId = accountSel.value;
+          accountSel.innerHTML =
+            `<option value="">All Accounts</option>` +
+            filteredAccounts
+              .map(
+                (a) =>
+                  `<option value="${a.id}"${String(a.id) === prevAccountId ? " selected" : ""}>${escapeHtml(a.name)}${txFilterState.show_merged_accounts && a.merged_into_id ? " (merged)" : ""}</option>`,
+              )
+              .join("");
+          // If previously selected account is a child and we switched to parent-only, clear it
+          if (!txFilterState.show_merged_accounts) {
+            const stillPresent = filteredAccounts.some((a) => String(a.id) === prevAccountId);
+            if (!stillPresent) {
+              accountSel.value = "";
+            }
+          }
+        }
+      }
+      txFilterState.account_id = document.getElementById("f-account").value;
       const tagCheckboxes = document.querySelectorAll("#f-tags-menu input[type=checkbox]");
       txFilterState.tag_ids = [...tagCheckboxes]
         .filter((cb) => cb.checked)
@@ -1455,6 +1481,8 @@ async function loadTransactionList(reset = true) {
     const totalsContainer = document.getElementById("tx-totals-container");
     if (totalsContainer) {
       const totalsParams = { ...txFilterState };
+      totalsParams.include_merged = !txFilterState.show_merged_accounts;
+      delete totalsParams.show_merged_accounts;
       if (!totalsParams.account_id) {
         totalsParams.account_id = undefined;
         totalsParams.include_merged = undefined;
@@ -1486,6 +1514,8 @@ async function loadTransactionList(reset = true) {
 
   try {
     const params = { ...txFilterState, limit: TX_PAGE_SIZE, offset: txOffset };
+    params.include_merged = !txFilterState.show_merged_accounts;
+    delete params.show_merged_accounts;
     if (!params.account_id) {
       params.account_id = undefined;
       params.include_merged = undefined;
@@ -1691,6 +1721,8 @@ async function exportPDF() {
       limit: 10000,
       offset: 0,
     };
+    params.include_merged = !txFilterState.show_merged_accounts;
+    delete params.show_merged_accounts;
     if (!params.account_id) {
       params.account_id = undefined;
       params.include_merged = undefined;
@@ -1698,6 +1730,8 @@ async function exportPDF() {
     if (!params.category_id) params.category_id = undefined;
 
     const totalsParams = { ...txFilterState };
+    totalsParams.include_merged = !txFilterState.show_merged_accounts;
+    delete totalsParams.show_merged_accounts;
     if (!totalsParams.account_id) {
       totalsParams.account_id = undefined;
       totalsParams.include_merged = undefined;
@@ -5889,7 +5923,7 @@ async function exportAllPDF() {
   txFilterState.transaction_type = "";
   txFilterState.account_id = "";
   txFilterState.category_id = "";
-  txFilterState.include_merged = false;
+  txFilterState.show_merged_accounts = true;
   try {
     await exportPDF();
   } finally {

@@ -2583,3 +2583,191 @@ describe("Transaction Type field", () => {
     expect(document.getElementById("edit-payment-type").value).toBe("Unknown");
   });
 });
+
+// ===========================================================================
+// FINCO-49 — Merged accounts in the transactions filter
+// ===========================================================================
+describe("FINCO-49: merged accounts filter toggle", () => {
+  const PARENT_ACCOUNT = {
+    id: 1,
+    name: "HDFC Savings",
+    account_type: "savings",
+    balance: 10000,
+    effective_balance: 10000,
+    balance_updated_at: "2026-01-01",
+    is_active: true,
+    merged_accounts: [],
+    merged_into_id: null,
+  };
+
+  const CHILD_ACCOUNT = {
+    id: 2,
+    name: "HDFC Old",
+    account_type: "savings",
+    balance: 0,
+    effective_balance: 0,
+    balance_updated_at: null,
+    is_active: true,
+    merged_accounts: [],
+    merged_into_id: 1,
+  };
+
+  async function renderTxScreen() {
+    mockAPI.getAccounts.mockResolvedValue([PARENT_ACCOUNT, CHILD_ACCOUNT]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getTags.mockResolvedValue([]);
+    mockAPI.getTransactionTotals.mockResolvedValue({
+      total_income: 0,
+      total_expense: 0,
+      net: 0,
+      transaction_count: 0,
+    });
+    const renderFn = window.Router.routes["#/transactions"];
+    await renderFn();
+    await new Promise((r) => setTimeout(r, 0));
+    return document.getElementById("screen");
+  }
+
+  beforeEach(async () => {
+    await renderTxScreen();
+    // Ensure the toggle starts unchecked (show_merged_accounts = false, the default)
+    const toggle = document.getElementById("f-merged");
+    if (toggle && toggle.checked) {
+      toggle.checked = false;
+      toggle.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  });
+
+  afterEach(() => {
+    mockAPI.getTransactions.mockResolvedValue([]);
+    mockAPI.getCategories.mockResolvedValue([]);
+    mockAPI.getAccounts.mockResolvedValue([]);
+  });
+
+  it("f-merged toggle is unchecked by default (show_merged_accounts = false)", () => {
+    const toggle = document.getElementById("f-merged");
+    expect(toggle).not.toBeNull();
+    expect(toggle.checked).toBe(false);
+  });
+
+  it("toggle label reads 'Show merged accounts'", () => {
+    const screen = document.getElementById("screen");
+    const filterToggle = screen.querySelector(".filter-toggle");
+    expect(filterToggle).not.toBeNull();
+    expect(filterToggle.textContent).toContain("Show merged accounts");
+  });
+
+  it("account dropdown shows only parent accounts when show_merged_accounts = false", () => {
+    const accountSel = document.getElementById("f-account");
+    const options = [...accountSel.options].filter((o) => o.value !== "");
+    // Only the parent account (merged_into_id = null) should be listed
+    expect(options).toHaveLength(1);
+    expect(options[0].value).toBe(String(PARENT_ACCOUNT.id));
+    expect(options[0].textContent).toBe(PARENT_ACCOUNT.name);
+    // Child account must NOT appear
+    const childOption = [...accountSel.options].find((o) => o.value === String(CHILD_ACCOUNT.id));
+    expect(childOption).toBeUndefined();
+  });
+
+  it("account dropdown shows all accounts with '(merged)' suffix for children when show_merged_accounts = true", async () => {
+    const toggle = document.getElementById("f-merged");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const accountSel = document.getElementById("f-account");
+    const options = [...accountSel.options].filter((o) => o.value !== "");
+    // Both parent and child accounts should be listed
+    expect(options).toHaveLength(2);
+    const parentOpt = options.find((o) => o.value === String(PARENT_ACCOUNT.id));
+    const childOpt = options.find((o) => o.value === String(CHILD_ACCOUNT.id));
+    expect(parentOpt).toBeDefined();
+    expect(parentOpt.textContent).toBe(PARENT_ACCOUNT.name); // no "(merged)" suffix
+    expect(childOpt).toBeDefined();
+    expect(childOpt.textContent).toBe(`${CHILD_ACCOUNT.name} (merged)`);
+  });
+
+  it("clears selected child account when show_merged_accounts is toggled back to false", async () => {
+    // First enable show_merged_accounts so the child account is accessible
+    const toggle = document.getElementById("f-merged");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Select the child account
+    const accountSel = document.getElementById("f-account");
+    accountSel.value = String(CHILD_ACCOUNT.id);
+
+    // Now disable show_merged_accounts
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Account dropdown should have been reset since child account is no longer shown
+    expect(accountSel.value).toBe("");
+  });
+
+  it("parent account selection is preserved when toggling show_merged_accounts", async () => {
+    const accountSel = document.getElementById("f-account");
+    // Select the parent account while toggle is off
+    accountSel.value = String(PARENT_ACCOUNT.id);
+
+    // Enable show_merged_accounts
+    const toggle = document.getElementById("f-merged");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Parent account selection should still be set
+    expect(accountSel.value).toBe(String(PARENT_ACCOUNT.id));
+  });
+
+  it("getTransactions is called with include_merged=true when show_merged_accounts=false and account selected", async () => {
+    mockAPI.getTransactions.mockClear();
+    const accountSel = document.getElementById("f-account");
+    accountSel.value = String(PARENT_ACCOUNT.id);
+    accountSel.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockAPI.getTransactions).toHaveBeenCalled();
+    const callArgs = mockAPI.getTransactions.mock.calls[0][0];
+    expect(callArgs.account_id).toBe(String(PARENT_ACCOUNT.id));
+    expect(callArgs.include_merged).toBe(true);
+    expect(callArgs.show_merged_accounts).toBeUndefined();
+  });
+
+  it("getTransactions is called with include_merged=false when show_merged_accounts=true and account selected", async () => {
+    // Enable show_merged_accounts
+    const toggle = document.getElementById("f-merged");
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    mockAPI.getTransactions.mockClear();
+    const accountSel = document.getElementById("f-account");
+    accountSel.value = String(PARENT_ACCOUNT.id);
+    accountSel.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockAPI.getTransactions).toHaveBeenCalled();
+    const callArgs = mockAPI.getTransactions.mock.calls[0][0];
+    expect(callArgs.account_id).toBe(String(PARENT_ACCOUNT.id));
+    expect(callArgs.include_merged).toBe(false);
+    expect(callArgs.show_merged_accounts).toBeUndefined();
+  });
+
+  it("getTransactions is called without include_merged when no account is selected", async () => {
+    mockAPI.getTransactions.mockClear();
+    const accountSel = document.getElementById("f-account");
+    accountSel.value = "";
+    accountSel.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockAPI.getTransactions).toHaveBeenCalled();
+    const callArgs = mockAPI.getTransactions.mock.calls[0][0];
+    expect(callArgs.account_id).toBeUndefined();
+    expect(callArgs.include_merged).toBeUndefined();
+  });
+});

@@ -1690,3 +1690,177 @@ test.describe("TestMapAllRecategorizesPast", () => {
 	});
 });
 
+// ===========================================================================
+// FINCO-49 — "Show merged accounts" checkbox in Transactions filter
+// ===========================================================================
+test.describe("TestMergedAccountsFilter", () => {
+	/**
+	 * Seed a parent account, a child account merged into it, and one
+	 * transaction on each. Returns { parentId, childId, parentTxId, childTxId }.
+	 */
+	async function seedMergedAccounts(page) {
+		return page.evaluate(async () => {
+			const parent = await DB.createAccount({
+				name: "FINCO49 Parent",
+				balance: 10000,
+				account_type: "savings",
+			});
+			const child = await DB.createAccount({
+				name: "FINCO49 Child",
+				balance: 5000,
+				account_type: "savings",
+			});
+			// Merge child into parent (child becomes the source/merged account)
+			await DB.mergeAccounts(child.id, parent.id);
+			const today = new Date().toISOString().split("T")[0];
+			const parentTx = await DB.createTransaction({
+				date: today,
+				amount: -100,
+				description: "Parent TX FINCO49",
+				transaction_type: "expense",
+				account_id: parent.id,
+			});
+			const childTx = await DB.createTransaction({
+				date: today,
+				amount: -200,
+				description: "Child TX FINCO49",
+				transaction_type: "expense",
+				account_id: child.id,
+			});
+			return {
+				parentId: parent.id,
+				childId: child.id,
+				parentTxId: parentTx.id,
+				childTxId: childTx.id,
+			};
+		});
+	}
+
+	async function navigateToTransactions(page) {
+		await page.evaluate(() => {
+			window.location.hash = "#/transactions";
+		});
+		await page.waitForSelector("#screen");
+		await page.waitForTimeout(600);
+	}
+
+	// -------------------------------------------------------------------------
+	// Test 1 — Default state: checkbox unchecked, dropdown hides merged children
+	// -------------------------------------------------------------------------
+	test("f-merged checkbox is unchecked by default", async ({ pwaPage }) => {
+		await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		const checkbox = pwaPage.locator("#f-merged");
+		expect(await checkbox.count()).toBe(1);
+		expect(await checkbox.isChecked()).toBe(false);
+	});
+
+	test("account dropdown hides merged child accounts when f-merged is unchecked", async ({
+		pwaPage,
+	}) => {
+		const { childId } = await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		// Checkbox must be unchecked (default)
+		expect(await pwaPage.locator("#f-merged").isChecked()).toBe(false);
+
+		// Child account should NOT appear in the dropdown
+		const childOption = pwaPage.locator(`#f-account option[value="${childId}"]`);
+		expect(await childOption.count()).toBe(0);
+	});
+
+	// -------------------------------------------------------------------------
+	// Test 2 — Checking the box reveals child accounts with "(merged)" suffix
+	// -------------------------------------------------------------------------
+	test("checking f-merged reveals child accounts with (merged) suffix", async ({ pwaPage }) => {
+		const { childId } = await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		// Check the toggle
+		await pwaPage.locator("#f-merged").check();
+		await pwaPage.waitForTimeout(400);
+
+		// Child account should now appear with "(merged)" suffix
+		const childOption = pwaPage.locator(`#f-account option[value="${childId}"]`);
+		expect(await childOption.count()).toBe(1);
+		const optionText = await childOption.textContent();
+		expect(optionText).toContain("(merged)");
+	});
+
+	// -------------------------------------------------------------------------
+	// Test 3 — Parent selection (unchecked) includes child transactions
+	// -------------------------------------------------------------------------
+	test("selecting parent account with f-merged unchecked shows child transactions too", async ({
+		pwaPage,
+	}) => {
+		const { parentId } = await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		// Ensure checkbox is unchecked
+		expect(await pwaPage.locator("#f-merged").isChecked()).toBe(false);
+
+		// Select the parent account in the dropdown
+		await pwaPage.locator("#f-account").selectOption(String(parentId));
+		await pwaPage.waitForTimeout(600);
+
+		const bodyText = await pwaPage.locator("#tx-list-container").innerText();
+		// Both parent and child transactions should appear
+		expect(bodyText).toContain("Parent TX FINCO49");
+		expect(bodyText).toContain("Child TX FINCO49");
+	});
+
+	// -------------------------------------------------------------------------
+	// Test 4 — Parent selection (checked) excludes child transactions
+	// -------------------------------------------------------------------------
+	test("selecting parent account with f-merged checked shows only parent transactions", async ({
+		pwaPage,
+	}) => {
+		const { parentId } = await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		// Check the toggle first
+		await pwaPage.locator("#f-merged").check();
+		await pwaPage.waitForTimeout(400);
+
+		// Select the parent account
+		await pwaPage.locator("#f-account").selectOption(String(parentId));
+		await pwaPage.waitForTimeout(600);
+
+		const bodyText = await pwaPage.locator("#tx-list-container").innerText();
+		// Only parent's own transaction should appear — NOT the child's
+		expect(bodyText).toContain("Parent TX FINCO49");
+		expect(bodyText).not.toContain("Child TX FINCO49");
+	});
+
+	// -------------------------------------------------------------------------
+	// Test 5 — Unchecking while child is selected resets account filter
+	// -------------------------------------------------------------------------
+	test("unchecking f-merged while child account is selected resets f-account to All Accounts", async ({
+		pwaPage,
+	}) => {
+		const { childId } = await seedMergedAccounts(pwaPage);
+		await navigateToTransactions(pwaPage);
+
+		// First check the box so child accounts appear
+		await pwaPage.locator("#f-merged").check();
+		await pwaPage.waitForTimeout(400);
+
+		// Select the child account
+		await pwaPage.locator("#f-account").selectOption(String(childId));
+		await pwaPage.waitForTimeout(200);
+
+		// Verify the child is selected
+		const selectedBeforeUncheck = await pwaPage.locator("#f-account").inputValue();
+		expect(selectedBeforeUncheck).toBe(String(childId));
+
+		// Now uncheck the toggle — child should disappear and selection should reset
+		await pwaPage.locator("#f-merged").uncheck();
+		await pwaPage.waitForTimeout(400);
+
+		// #f-account should be back to "" (All Accounts)
+		const selectedAfterUncheck = await pwaPage.locator("#f-account").inputValue();
+		expect(selectedAfterUncheck).toBe("");
+	});
+});
+

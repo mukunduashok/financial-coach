@@ -3323,6 +3323,15 @@ export const DB = {
     }
 
     // A few one-off transactions for variety across more categories.
+    // Current-month rent — always visible with the default month filter on the transactions screen.
+    await addTx({
+      date: monthStart,
+      amount: 25000,
+      description: "House rent",
+      transaction_type: "expense",
+      account_id: savings.id,
+      category_id: catId("Bills & Utilities"),
+    });
     await addTx({
       date: daysAgo(20),
       amount: 1250,
