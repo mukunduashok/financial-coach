@@ -5702,6 +5702,12 @@ ${
     <p class="text-muted">Revisit the setup guide to configure accounts, Gmail sync, or AI.</p>
     <button class="btn btn-outline" data-action="restart-onboarding">↩ Restart onboarding tour</button>
   </div>
+
+  <footer class="settings-legal-footer">
+    <a href="/privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+    &nbsp;·&nbsp;
+    <a href="/terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a>
+  </footer>
   `;
 
   // Show feedback from iOS PWA OAuth redirect

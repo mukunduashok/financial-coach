@@ -100,3 +100,55 @@ test.describe("PrivacyMode", () => {
 		expect(hasClassAfter).toBe(true);
 	});
 });
+
+// ===========================================================================
+// Legal pages — standalone privacy.html and terms.html
+// ===========================================================================
+test.describe("LegalPages", () => {
+	test("privacy.html loads with h1 Privacy Policy and no JS errors", async ({ page }) => {
+		const jsErrors = [];
+		page.on("pageerror", (err) => jsErrors.push(err.message));
+
+		await page.goto("/privacy.html");
+		await page.waitForLoadState("domcontentloaded");
+
+		const heading = page.locator("h1");
+		await expect(heading).toHaveCount(1);
+		const headingText = await heading.innerText();
+		expect(headingText.toLowerCase()).toContain("privacy policy");
+
+		expect(jsErrors).toHaveLength(0);
+	});
+
+	test("terms.html loads with h1 Terms of Service and no JS errors", async ({ page }) => {
+		const jsErrors = [];
+		page.on("pageerror", (err) => jsErrors.push(err.message));
+
+		await page.goto("/terms.html");
+		await page.waitForLoadState("domcontentloaded");
+
+		const heading = page.locator("h1");
+		await expect(heading).toHaveCount(1);
+		const headingText = await heading.innerText();
+		expect(headingText.toLowerCase()).toContain("terms");
+
+		expect(jsErrors).toHaveLength(0);
+	});
+
+	test("privacy.html has a back link to the main app", async ({ page }) => {
+		await page.goto("/privacy.html");
+		await page.waitForLoadState("domcontentloaded");
+
+		// Should have a link pointing back to the main app (href="/" or href="index.html")
+		const backLink = page.locator("a").filter({ hasText: /back|home|financial coach/i }).first();
+		expect(await backLink.count()).toBe(1);
+	});
+
+	test("terms.html has a back link to the main app", async ({ page }) => {
+		await page.goto("/terms.html");
+		await page.waitForLoadState("domcontentloaded");
+
+		const backLink = page.locator("a").filter({ hasText: /back|home|financial coach/i }).first();
+		expect(await backLink.count()).toBe(1);
+	});
+});

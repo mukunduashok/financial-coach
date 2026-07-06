@@ -23,7 +23,7 @@ All routes are registered at the bottom of `app.js` using `Router.register(hash,
 | `#/reports` | `renderReports()` | Spending analysis with pie chart + monthly line chart, category breakdown table, tag filter |
 | `#/chat` | `renderChat()` | AI chat interface with message history, session management, and suggestion chips |
 | `#/taxonomy` | `renderTaxonomy()` | Taxonomy browser for categories tab, merchants tab, and tags tab |
-| `#/settings` | `renderSettings()` | Settings panel for AI provider configuration, data export/import, Google Drive sync, session security, trusted device |
+| `#/settings` | `renderSettings()` | Settings panel for AI provider configuration, data export/import, Google Drive sync, session security, trusted device. Has a `<footer class="settings-legal-footer">` with links to `/privacy.html` and `/terms.html` (both open in new tab). |
 
 ## Database Methods (DB singleton in db.js)
 

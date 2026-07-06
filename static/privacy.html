@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — Financial Coach</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="/js/theme-init.js"></script>
+  <style>
+    .legal-page {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: var(--space-xl) var(--space-md);
+      line-height: 1.7;
+    }
+    .legal-page h1 { margin-bottom: var(--space-sm); }
+    .legal-page h2 { margin-top: var(--space-xl); margin-bottom: var(--space-sm); font-size: 1.1rem; }
+    .legal-page p, .legal-page li { color: var(--color-text-secondary); margin-bottom: var(--space-sm); }
+    .legal-page ul { padding-left: 1.5rem; }
+    .legal-back { display: inline-block; margin-bottom: var(--space-lg); color: var(--color-text-secondary); text-decoration: none; }
+    .legal-back:hover { color: var(--color-primary); }
+  </style>
+</head>
+<body>
+  <script src="/js/theme-apply.js"></script>
+  <div class="legal-page">
+    <a href="/" class="legal-back">← Back to App</a>
+    <h1>Privacy Policy</h1>
+    <p class="text-muted">Effective Date: 6 July 2026</p>
+
+    <h2>1. About Financial Coach</h2>
+    <p>
+      Financial Coach is a free personal finance tracking Progressive Web App (PWA) designed for
+      Indian Rupee (₹) transactions. The application runs entirely in your browser — there are no
+      Financial Coach servers, no user accounts, and no cloud storage operated by Financial Coach.
+      Your financial data never leaves your device unless you explicitly enable Google Drive backup
+      or use an AI feature.
+    </p>
+
+    <h2>2. Data We Collect and Store</h2>
+    <p>
+      All data you enter — including transactions, accounts, budgets, goals, categories, merchants,
+      and AI chat conversations — is stored locally in your browser using SQLite WASM (sql.js) and
+      IndexedDB. Financial Coach does not operate any servers and never receives, transmits, or
+      stores your financial data on its own infrastructure.
+    </p>
+    <p>
+      We do not use cookies, analytics, tracking pixels, or any form of telemetry. No data is
+      collected about how you use the application.
+    </p>
+
+    <h2>3. Google OAuth Permissions</h2>
+    <p>
+      If you choose to connect your Google account (for Gmail sync or Google Drive backup), we
+      request the following OAuth scopes. These are requested only when you initiate the connection
+      in Settings.
+    </p>
+    <ul>
+      <li>
+        <strong>gmail.readonly</strong> (<code>https://www.googleapis.com/auth/gmail.readonly</code>):
+        Read your Gmail messages to extract bank and payment transaction details. Only email bodies
+        from sender addresses you specify are processed. Emails are read on your device and are
+        never transmitted to or stored on any Financial Coach server.
+      </li>
+      <li>
+        <strong>drive.appdata</strong> (<code>https://www.googleapis.com/auth/drive.appdata</code>):
+        Read and write a single encrypted backup file in the hidden appdata folder of your Google
+        Drive. This folder is not visible in your normal Drive file list. The backup file is
+        encrypted with AES-GCM using a key derived from your passphrase (PBKDF2) before it is
+        uploaded, so Google cannot read its contents and neither can Financial Coach.
+      </li>
+      <li>
+        <strong>openid</strong> and <strong>email</strong>: Identify your Google account so that
+        your email address can be displayed in the Settings screen and used to authenticate access
+        to your Drive appdata folder.
+      </li>
+    </ul>
+    <p>
+      OAuth tokens are stored only in your browser's localStorage. You can revoke access at any
+      time via your
+      <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">
+        Google Account permissions page
+      </a>
+      or by disconnecting from the Settings screen.
+    </p>
+    <p>
+      Financial Coach's use and transfer of information received from Google APIs adheres to the
+      <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">
+        Google API Services User Data Policy
+      </a>, including the Limited Use requirements.
+    </p>
+
+    <h2>4. AI Providers</h2>
+    <p>
+      Financial Coach supports optional AI features (chat assistant and Gmail transaction
+      extraction). You may configure your own API keys for one of the following providers:
+      Groq, OpenAI (GPT), Google Gemini, Azure OpenAI, or Ollama (local). Your API keys are
+      stored only in your browser's localStorage and are never sent to Financial Coach servers.
+    </p>
+    <p>
+      When you use an AI feature, a prompt containing relevant financial context is sent directly
+      from your browser to the AI provider you configured. Before sending, our
+      <code>maskPII()</code> function replaces account numbers, UPI IDs, card numbers, and other
+      personally identifiable information with masked placeholders. Financial Coach does not
+      intercept, log, or store any data sent to AI providers. Each provider processes your request
+      under its own privacy policy.
+    </p>
+
+    <h2>5. Session Security</h2>
+    <p>
+      By default, all locally stored data is automatically wiped after 6 hours of browser
+      inactivity. This protects your data if you forget to close the app on a shared or public
+      device. The inactivity timer is reset whenever you interact with the application (click,
+      scroll, type).
+    </p>
+    <p>
+      You can opt in to <strong>Trusted Device</strong> mode (Settings → Session Security) to
+      disable automatic wiping on a device you own and trust. This setting is stored in
+      localStorage and applies only to the current browser profile.
+    </p>
+
+    <h2>6. Google Drive Encrypted Backup</h2>
+    <p>
+      If you enable Google Drive sync, your Financial Coach database is serialised and encrypted
+      entirely in your browser before being uploaded. Encryption uses AES-GCM (256-bit) with a
+      key derived from your chosen passphrase using PBKDF2 (SHA-256, 100,000 iterations).
+      Financial Coach never has access to your passphrase or the plaintext database content.
+      The encrypted file is stored in your Drive appdata folder, which is accessible only to
+      this application.
+    </p>
+
+    <h2>7. Data Retention and Deletion</h2>
+    <p>
+      You have full control over your data at all times. You can:
+    </p>
+    <ul>
+      <li>Export your database as a binary backup file (.db) via Settings → Export Data.</li>
+      <li>Export transactions as a CSV or PDF file via Settings → Export CSV / Export PDF.</li>
+      <li>Import a previously exported binary backup to restore your data via Settings → Import Backup.</li>
+      <li>Delete the Google Drive backup file via Settings → Google Drive → Delete Backup.</li>
+    </ul>
+    <p>
+      Financial Coach does not have a manual data-wipe button. To permanently delete all locally
+      stored data, you must clear this site's stored data in your browser settings. Note that
+      clearing browser history or the browser cache alone does <strong>not</strong> erase app data
+      — you must specifically clear <em>site data</em> or <em>cookies and site data</em> for this
+      domain (e.g., in Chrome: Settings → Privacy and Security → Site Settings → View permissions
+      and data stored across sites; in Firefox: Settings → Privacy &amp; Security → Manage Data).
+    </p>
+    <p>
+      The automatic session wipe (6 hours of inactivity by default — see Section 5) also
+      permanently erases all local data and credentials.
+    </p>
+
+    <h2>8. Your Rights</h2>
+    <p>
+      Under the Information Technology Act, 2000 (India) and applicable data protection principles,
+      you have the right to access, correct, and delete your personal data. Because all data is
+      stored locally in your browser, you exercise these rights directly within the application —
+      there is no need to contact us to access or delete your data.
+    </p>
+    <p>
+      If you have questions or concerns about how Google processes data obtained through OAuth,
+      please refer to
+      <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">
+        Google's Privacy Policy
+      </a>.
+    </p>
+
+    <h2>9. Third-Party Services</h2>
+    <p>
+      Financial Coach does not share your data with any third parties beyond the services you
+      explicitly configure (Google OAuth, your chosen AI provider). Each service operates under
+      its own terms and privacy policy:
+    </p>
+    <ul>
+      <li><a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a></li>
+      <li><a href="https://groq.com/privacy-policy/" target="_blank" rel="noopener noreferrer">Groq Privacy Policy</a></li>
+      <li><a href="https://openai.com/policies/privacy-policy" target="_blank" rel="noopener noreferrer">OpenAI Privacy Policy</a></li>
+      <li><a href="https://ai.google.dev/terms" target="_blank" rel="noopener noreferrer">Google Gemini API Terms</a></li>
+    </ul>
+    <p>
+      Financial Coach is deployed on Cloudflare Pages. Cloudflare may collect anonymised network
+      traffic metadata (e.g., IP addresses, request logs) as part of its standard CDN and security
+      operations. Please refer to
+      <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">
+        Cloudflare's Privacy Policy
+      </a>
+      for details.
+    </p>
+
+    <h2>10. Children's Privacy</h2>
+    <p>
+      Financial Coach is not directed at children under the age of 13. We do not knowingly collect
+      personal information from children. If you believe a child has used the application and you
+      have concerns, please contact us at the address below.
+    </p>
+
+    <h2>11. Changes to This Policy</h2>
+    <p>
+      If we make material changes to this Privacy Policy, the Effective Date at the top of this
+      page will be updated to reflect the date of the change. We encourage you to review this
+      policy periodically.
+    </p>
+
+    <h2>12. Contact</h2>
+    <p>
+      For privacy-related questions or concerns, please contact:
+      <a href="mailto:mukunduashok@gmail.com">mukunduashok@gmail.com</a>
+    </p>
+  </div>
+</body>
+</html>

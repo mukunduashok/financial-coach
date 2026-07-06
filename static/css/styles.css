@@ -2848,3 +2848,20 @@ body.privacy-active .amount-private {
 	margin-left: var(--space-xs);
 	-webkit-tap-highlight-color: transparent;
 }
+
+/* ---- Legal pages footer in Settings ---- */
+.settings-legal-footer {
+  text-align: center;
+  padding: var(--space-lg) var(--space-md);
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.settings-legal-footer a {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+}
+
+.settings-legal-footer a:hover {
+  color: var(--color-primary);
+}

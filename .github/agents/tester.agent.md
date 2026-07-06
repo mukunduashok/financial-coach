@@ -47,10 +47,11 @@ tests/e2e/js/                # Playwright E2E tests
   navigation.spec.js         # Nav/routing
   pwa-smoke.spec.js          # PWA manifest, service worker
   reports.spec.js            # Reports screen
-  settings.spec.js           # Settings screen
+  settings.spec.js           # Settings screen — AI config, GDrive sync, session security, legal footer links
   taxonomy.spec.js           # Taxonomy screen
   transactions.spec.js       # Transactions screen
   fixtures.js                # pwaPage fixture (fresh DB, loads at :8082)
+  privacy.spec.js            # Privacy mode (hide/reveal amounts) + LegalPages smoke tests (privacy.html, terms.html)
 ```
 
 Test commands:

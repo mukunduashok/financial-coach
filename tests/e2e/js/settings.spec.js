@@ -953,3 +953,37 @@ test.describe("TestSampleDataLoader", () => {
 		await expect(loadBtn).toHaveCount(0);
 	});
 });
+
+// ===========================================================================
+// Legal Footer — Privacy Policy and Terms of Service links
+// ===========================================================================
+test.describe("TestLegalFooter", () => {
+	test.beforeEach(async ({ pwaPage }) => {
+		await goSettings(pwaPage);
+		await pwaPage.waitForSelector(".settings-legal-footer");
+	});
+
+	test("Privacy Policy link is visible in the settings footer", async ({ pwaPage }) => {
+		const link = pwaPage.locator(".settings-legal-footer a:has-text('Privacy Policy')");
+		expect(await link.count()).toBe(1);
+		expect(await link.isVisible()).toBe(true);
+	});
+
+	test("Terms of Service link is visible in the settings footer", async ({ pwaPage }) => {
+		const link = pwaPage.locator(".settings-legal-footer a:has-text('Terms of Service')");
+		expect(await link.count()).toBe(1);
+		expect(await link.isVisible()).toBe(true);
+	});
+
+	test("Privacy Policy link has correct href and opens in new tab", async ({ pwaPage }) => {
+		const link = pwaPage.locator(".settings-legal-footer a:has-text('Privacy Policy')");
+		expect(await link.getAttribute("href")).toBe("/privacy.html");
+		expect(await link.getAttribute("target")).toBe("_blank");
+	});
+
+	test("Terms of Service link has correct href and opens in new tab", async ({ pwaPage }) => {
+		const link = pwaPage.locator(".settings-legal-footer a:has-text('Terms of Service')");
+		expect(await link.getAttribute("href")).toBe("/terms.html");
+		expect(await link.getAttribute("target")).toBe("_blank");
+	});
+});
