@@ -76,6 +76,13 @@ const mockAPI = {
   deleteTag: vi.fn().mockResolvedValue(undefined),
   setTransactionTags: vi.fn().mockResolvedValue(undefined),
   getSpendingReport: vi.fn().mockResolvedValue({ total_transactions: 0, categories: [] }),
+  isBiometricAvailable: vi.fn().mockResolvedValue(false),
+  isBiometricEnabled: vi.fn().mockReturnValue(false),
+  setupBiometric: vi.fn().mockResolvedValue(undefined),
+  unlockWithBiometric: vi.fn().mockResolvedValue(true),
+  disableBiometric: vi.fn(),
+  isVaultConfigured: vi.fn().mockReturnValue(false),
+  setupVault: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock("../../static/js/api.js", () => ({ API: mockAPI }));
 
@@ -2769,5 +2776,64 @@ describe("FINCO-49: merged accounts filter toggle", () => {
     const callArgs = mockAPI.getTransactions.mock.calls[0][0];
     expect(callArgs.account_id).toBeUndefined();
     expect(callArgs.include_merged).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// Vault — PIN minimum 4 characters
+// ===========================================================================
+describe("Vault — PIN minimum 4 characters", () => {
+  function openVaultSetupModal() {
+    const btn = document.createElement("button");
+    btn.setAttribute("data-action", "vault-setup");
+    document.body.appendChild(btn);
+    btn.click();
+    document.body.removeChild(btn);
+  }
+
+  afterEach(() => {
+    document.getElementById("vault-setup-modal")?.remove();
+    mockAPI.setupVault.mockClear();
+  });
+
+  it("showVaultSetupModal renders '(min 4 digits/characters)' label text", () => {
+    openVaultSetupModal();
+    const modal = document.getElementById("vault-setup-modal");
+    expect(modal).not.toBeNull();
+    expect(modal.textContent).toContain("min 4 digits/characters");
+    expect(modal.textContent).not.toContain("min 8 characters");
+  });
+
+  it("doSetupVault shows error for 3-character passphrase", async () => {
+    openVaultSetupModal();
+    const modal = document.getElementById("vault-setup-modal");
+    expect(modal).not.toBeNull();
+
+    modal.querySelector("#vault-setup-passphrase").value = "abc";
+    modal.querySelector("#vault-setup-confirm").value = "abc";
+
+    const submitBtn = modal.querySelector('[data-action="do-setup-vault"]');
+    submitBtn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const errEl = modal.querySelector("#vault-setup-error");
+    expect(errEl.style.display).not.toBe("none");
+    expect(errEl.textContent).toContain("at least 4 characters");
+    expect(mockAPI.setupVault).not.toHaveBeenCalled();
+  });
+
+  it("doSetupVault accepts 4-character passphrase and calls API.setupVault", async () => {
+    openVaultSetupModal();
+    const modal = document.getElementById("vault-setup-modal");
+    expect(modal).not.toBeNull();
+
+    modal.querySelector("#vault-setup-passphrase").value = "abcd";
+    modal.querySelector("#vault-setup-confirm").value = "abcd";
+
+    const submitBtn = modal.querySelector('[data-action="do-setup-vault"]');
+    submitBtn.click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockAPI.setupVault).toHaveBeenCalledWith("abcd");
   });
 });

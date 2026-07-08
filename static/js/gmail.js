@@ -79,7 +79,7 @@ const AI_PROVIDERS = {
     name: "Groq",
     endpoint: "https://api.groq.com/openai/v1/chat/completions",
     requiresKey: true,
-    defaultModel: "llama-3.3-70b-versatile",
+    defaultModel: "openai/gpt-oss-120b",
   },
   openai: {
     name: "OpenAI",
@@ -97,7 +97,7 @@ const AI_PROVIDERS = {
     name: "Google Gemini",
     endpoint: "https://generativelanguage.googleapis.com/v1beta/models",
     requiresKey: true,
-    defaultModel: "gemini-2.0-flash",
+    defaultModel: "gemini-3.1-flash-lite",
   },
   azure: {
     name: "Azure OpenAI",
@@ -789,7 +789,7 @@ export const Gmail = {
     if (provider === "gemini") {
       requestBody = {
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.1 },
+        generationConfig: { temperature: 0.1, response_mime_type: "application/json" },
       };
     } else if (provider === "azure") {
       requestBody = {
@@ -869,67 +869,25 @@ For each email, extract:
     "amount": <number (positive for credits/deposits, negative for debits/payments, OR current balance if no transaction)>,
     "transaction_type": "<income|expense|balance>",
     "date": "<YYYY-MM-DDTHH:MM format, use the email DATE header for time if the email body doesn't mention a specific time>",
-    "description": "<STRUCTURED DESCRIPTION - see format rules below>",
+    "description": "<brief natural description of what this transaction is for, e.g. 'Blinkit grocery order', 'Electricity bill BESCOM', 'Salary from Infosys', 'ATM withdrawal', 'Transfer to [Individual]'>",
     "merchant_upi_id": "<UPI VPA/handle if present, e.g. 'merchant@paytm', 'store@okaxis', null if not found>",
     "merchant_name": "<clean merchant/payee name extracted from description, e.g. 'Blinkit', 'Swiggy', null if unclear>",
     "account_last_digits": "<exactly the last 4 digits of account/card number if mentioned; if fewer than 4 digits are visible in the email, extract only what is visible>",
     "account_type": "<savings|current|credit|debit|deposit if clearly mentioned, 'savings' otherwise>",
     "bank_name": "<bank name if identifiable from email sender or content>",
     "balance_after": <remaining balance after transaction OR current balance, null if not mentioned>,
-    "transaction_id": "<transaction reference number if mentioned>",
+    "transaction_id": "<bank reference number if mentioned, e.g. IMPS ref, UPI ref, NACH ref, cheque number, ref no.>",
     "category": "<food|transport|shopping|salary|utilities|balance_inquiry|etc>",
     "is_transaction": <true if email describes a financial transaction, false if only balance info>,
     "is_balance_info": <true if email contains any balance information, false otherwise>
 }
 
-DESCRIPTION FIELD FORMAT (CRITICAL FOR CATEGORIZATION):
-Create a clear, structured description that helps with automatic categorization.
-
-FORMAT: "Component1: Value | Component2: Value | Component3: Value"
-
-COMPONENTS TO EXTRACT (include only if available):
-- Merchant: Clean merchant/recipient name (remove UPI IDs, technical codes)
-  Examples: "Blinkit" not "paytm-blinkit@ptybl", "Amazon" not "AMAZON.IN/BILLDESK", "Swiggy" not "swiggy@paytm"
-- Method: Payment method (UPI, Credit Card, Debit Card, NetBanking, IMPS, NEFT, RTGS, ATM, Cheque)
-- Via: Platform/intermediary if used (Paytm, PhonePe, GooglePay, Amazon Pay, etc.)
-- Purpose: Transaction purpose if mentioned (Salary, Refund, Bill Payment, Transfer, Purchase, Withdrawal, Deposit)
-- Location: Place/store if mentioned
-- Details: Any additional useful context (product name, service type, recipient name for transfers)
-
-DESCRIPTION EXAMPLES:
-- "UPI to paytm-blinkit@ptybl Blinkit" → "Merchant: Blinkit | Method: UPI | Via: Paytm"
-- "AMAZON PAY UPI payment" (has UPI ID like amazonpay@apl) → "Merchant: Amazon | Method: UPI | Via: Amazon Pay"
-- "Thank you for using Amazon Pay Balance / Amazon Pay Wallet" (no UPI, wallet funds) → "Merchant: Amazon | Method: Wallet | Via: Amazon Pay"
-- "PhonePe Wallet balance deducted" (no UPI ID) → "Method: Wallet | Via: PhonePe"
-- "Paid via Paytm Wallet" (no UPI ID) → "Method: Wallet | Via: Paytm"
-- "ATM withdrawal HDFC ATM Mumbai" → "Purpose: ATM Withdrawal | Method: Debit Card | Location: Mumbai"
-- "Salary credited by Infosys Technologies" → "Purpose: Salary | Method: NEFT | From: Infosys Technologies"
-- "IMPS transfer to [Individual]" → "Purpose: Transfer | Method: IMPS | To: [Individual]"
-- "Swiggy food order" → "Merchant: Swiggy | Method: UPI | Purpose: Food Delivery"
-- "Netflix subscription" → "Merchant: Netflix | Purpose: Subscription"
-- "Electricity bill BESCOM" → "Merchant: BESCOM | Purpose: Utility Bill | Details: Electricity"
-- "Refund from Flipkart" → "Purpose: Refund | From: Flipkart"
-- Balance inquiry → "Balance Inquiry" or "Account Statement"
-- Unknown/unclear → "Transaction" or "Payment via [Method]"
-
-DESCRIPTION RULES:
-1. Clean up merchant names - remove UPI handles (@paytm, @ybl, etc.), technical codes
-2. Prioritize information that helps categorization (merchant > purpose > method)
-3. Use " | " (space-pipe-space) as separator between components
-4. Include only available information, omit missing components
-5. Keep concise but informative (3-5 components max)
-6. Store technical details (ref numbers) in transaction_id field, not description
-
 MERCHANT EXTRACTION RULES:
-1. merchant_upi_id: Extract UPI VPA/handle exactly as it appears (e.g., "paytm-blinkit@ptybl", "swiggy@paytm", "store@okaxis")
-   - Look for patterns: "to <upi_id>", "UPI/<upi_id>", any text containing @paytm, @okicici, @ybl, @oksbi, @okaxis, etc.
-   - Set to null if no UPI handle found (e.g., card payments, NEFT, IMPS without UPI)
-2. merchant_name: Extract clean merchant/recipient name
-   - Remove UPI suffixes (@paytm, @ybl, etc.) from display name
-   - Examples: "paytm-blinkit@ptybl" → "Blinkit", "AMAZON.IN/BILLDESK" → "Amazon"
-   - For transfers to individuals, use [Individual] instead of their real name in To:/From: description fields
-   - For P2P UPI VPAs where the handle starts with digits (phone numbers), e.g. "[PHONE]@ybl", store merchant_upi_id as "[PHONE]@ybl" and set merchant_name to null
-   - Set to null only if merchant/recipient is completely unclear
+1. merchant_upi_id: Extract the UPI VPA exactly as it appears (e.g. "paytm-blinkit@ptybl"). Set null if no UPI handle found (card, NEFT, IMPS without UPI).
+2. merchant_name: Clean merchant/recipient name — strip UPI suffixes (@paytm, @ybl, etc.) and technical codes. Examples: "paytm-blinkit@ptybl" → "Blinkit", "AMAZON.IN/BILLDESK" → "Amazon".
+3. For transfers to individuals, set merchant_name to null and mention "[Individual]" in description (never use real names).
+4. For P2P UPI VPAs starting with digits (phone numbers, e.g. "[PHONE]@ybl"), store the VPA in merchant_upi_id and set merchant_name to null.
+5. Set merchant_name to null only if the recipient/merchant is completely unclear.
 
 RULES:
 1. Return exactly ${emails.length} objects in a JSON array, same order as input
@@ -956,25 +914,16 @@ RULES:
 7. Only return valid JSON array, no additional text
 
 EXAMPLES:
-- "Rs.254 is debited from your HDFC Bank Credit Card" → is_transaction: true, amount: -254, transaction_type: "expense", description: "Purchase | Method: Credit Card", is_balance_info: false, balance_after: null
-- "Your A/c xxxx4567 is debited for INR 5,000.00 on 03-12-25 and A/c xxxx1234 is credited (IMPS Ref No. 785496587123). Available balance is INR 21314" → is_transaction: true, amount: -5000, transaction_type: "expense", description: "Purpose: Transfer | Method: IMPS", balance_after: 21314, is_balance_info: true (only if account is savings/current/deposit)
-- "INR 20000 has been successfully added to your account" → is_transaction: true, amount: 20000, transaction_type: "income", description: "Purpose: Deposit | Method: Transfer", is_balance_info: false
-- "INR 20000 has been successfully added to your account, available balance in your account is INR 30000" → is_transaction: true, amount: 20000, transaction_type: "income", description: "Purpose: Deposit | Method: Transfer", balance_after: 30000, is_balance_info: true
-- "Dear Customer, Rs. 1000.00 is successfully credited to your account" → is_transaction: true, amount: 1000, transaction_type: "income", description: "Purpose: Credit | Method: Transfer", is_balance_info: false
-- "Thank you for using your HDFC Bank Debit Card ending 1234 for ATM withdrawal for Rs 10000" → is_transaction: true, amount: -10000, transaction_type: "expense", description: "Purpose: ATM Withdrawal | Method: Debit Card", is_balance_info: false, balance_after: null
-- "Your ICICI Bank Credit Card XX1234 has been used for a transaction of INR 899.00 on Dec 03, 2025 at 11:33:44. Info: AMAZON PAY" → is_transaction: true, amount: -899, transaction_type: "expense", description: "Merchant: Amazon | Method: Credit Card | Via: Amazon Pay", is_balance_info: false, balance_after: null
-- "Your A/C XXXXX7890 Credited INR 2,000.00 on 03/12/25 -Deposit by transfer from Mr Adam. Avl Bal INR 2000" → is_transaction: true, amount: 2000, transaction_type: "income", description: "Purpose: Transfer | Method: Deposit | From: [Individual]", balance_after: 2000, is_balance_info: true
-- "Thx for INB txn of Rs.2000 frm A/c X1234 ref# IF4362728 on 03DEC25." → is_transaction: true, amount: -2000, transaction_type: "expense", description: "Purpose: Transfer | Method: NetBanking", is_balance_info: false
-- "Dear Customer, Your A/C XXXXX012345 has a debit by NACH of Rs 2,000.00 on 10/06/26. Avl Bal Rs 123456." → is_transaction: true, amount: -2000, transaction_type: "expense", description: "Purpose: Auto-debit | Method: NACH", account_last_digits: "2345", balance_after: 123456, is_balance_info: true
-- "UPI payment to paytm-blinkit@ptybl for Rs 450 via Paytm" → is_transaction: true, amount: -450, transaction_type: "expense", description: "Merchant: Blinkit | Method: UPI | Via: Paytm"
-- "Payment of Rs 599 to Netflix via Credit Card" → is_transaction: true, amount: -599, transaction_type: "expense", description: "Merchant: Netflix | Method: Credit Card | Purpose: Subscription"
-- "Salary credited Rs 75000 from ABC Corp" → is_transaction: true, amount: 75000, transaction_type: "income", description: "Purpose: Salary | From: ABC Corp | Method: NEFT"
+- "Rs.254 is debited from your HDFC Bank Credit Card" → is_transaction: true, amount: -254, transaction_type: "expense", merchant_name: null, description: "Credit card purchase", is_balance_info: false, balance_after: null
+- "UPI payment to paytm-blinkit@ptybl for Rs 450" → is_transaction: true, amount: -450, transaction_type: "expense", merchant_upi_id: "paytm-blinkit@ptybl", merchant_name: "Blinkit", description: "Blinkit grocery order"
+- "Your A/c xxxx4567 is debited for INR 5,000.00 by IMPS Ref No. 785496587123. Available balance is INR 21314" → is_transaction: true, amount: -5000, transaction_type: "expense", merchant_name: null, description: "IMPS transfer", transaction_id: "785496587123", balance_after: 21314, is_balance_info: true
+- "Salary credited Rs 75000 from Infosys" → is_transaction: true, amount: 75000, transaction_type: "income", merchant_name: "Infosys", description: "Salary from Infosys"
+- "Your ICICI Bank Credit Card XX1234 has been used for INR 899.00 at AMAZON PAY" → is_transaction: true, amount: -899, transaction_type: "expense", merchant_name: "Amazon", description: "Amazon Pay purchase", is_balance_info: false, balance_after: null
+- "Dear Customer, Your A/C has a debit by NACH of Rs 2,000.00. Avl Bal Rs 123456." → is_transaction: true, amount: -2000, transaction_type: "expense", merchant_name: null, description: "NACH auto-debit", balance_after: 123456, is_balance_info: true
 
 EXAMPLES OF BALANCE-ONLY EMAILS:
 - "Account Balance Inquiry: Available balance Rs. 25,450.00 as on 05-Dec-2024" → is_transaction: false, amount: 25450, transaction_type: "balance", is_balance_info: true, description: "Balance Inquiry"
-- "Mini Statement - Current balance: Rs. 15,230.50 as of 04-Dec-2024" → is_transaction: false, amount: 15230.50, transaction_type: "balance", is_balance_info: true, description: "Statement"
 - "Balance Alert: Your account balance has fallen below minimum. Current balance: Rs. 4,250.00" → is_transaction: false, amount: 4250, transaction_type: "balance", is_balance_info: true, description: "Balance Alert"
-- "available balance in your account is Rs. INR 30000 as of 04-DEC-25." → is_transaction: false, amount: 30000, transaction_type: "balance", is_balance_info: true, description: "Balance Inquiry"
 
 JSON Array Response:`;
   },
@@ -983,7 +932,7 @@ JSON Array Response:`;
     const transactionsSection = transactions
       .map(
         (tx, i) =>
-          `<transaction_content>\nTRANSACTION #${i + 1}:\nDescription: ${maskPII(tx.description || "")}\nAmount: ${tx.amount || 0}\nBank/Source: ${tx.bank_name || ""}\n</transaction_content>`,
+          `<transaction_content>\nTRANSACTION #${i + 1}:\nMerchant: ${tx.merchant_name || ""}\nDescription: ${maskPII(tx.description || "")}\nAmount: ${tx.amount || 0}\nBank/Source: ${tx.bank_name || ""}\n</transaction_content>`,
       )
       .join("\n");
 

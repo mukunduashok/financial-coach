@@ -58,5 +58,10 @@ export const SESSION_EXPIRY_WARN_KEY = "fincoach-session-expiry-warned";
 // iOS PWA OAuth redirect callback query param
 export const GMAIL_OAUTH_CALLBACK_PARAM = "gmail-oauth";
 
+// Vault biometric authentication keys
+export const VAULT_BIOMETRIC_CRED_KEY = "fincoach-vault-biometric-cred";
+export const VAULT_BIOMETRIC_WRAP_KEY = "fincoach-vault-biometric-wrap";
+export const VAULT_BIOMETRIC_WRAPPED_KEY = "fincoach-vault-biometric-wrapped";
+
 export const PRIVACY_MODE_KEY = "fincoach-privacy-mode";
 export const PRIVACY_REVEAL_MS = 300_000;

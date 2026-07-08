@@ -491,6 +491,45 @@ describe("Extraction Prompt", () => {
     expect(prompt).toContain("[Individual]");
     expect(prompt).not.toContain("John Doe");
   });
+
+  it("does not use pipe-format DESCRIPTION FIELD FORMAT rules", () => {
+    const prompt = Gmail._buildExtractionPrompt([
+      { from: "alerts@bank.com", date: "2025-01-01", subject: "Debit alert", text: "Rs 500 debited" },
+    ]);
+    expect(prompt).not.toContain("DESCRIPTION FIELD FORMAT");
+    expect(prompt).not.toContain("Component1: Value | Component2: Value");
+    expect(prompt).toContain("brief natural description");
+  });
+
+  it("_buildExtractionPrompt retains all 15 required JSON schema fields", () => {
+    const emails = [{ from: "a@hdfc.com", date: "2025-01-01", subject: "S1", text: "T1" }];
+    const prompt = Gmail._buildExtractionPrompt(emails);
+    const requiredFields = [
+      "email_index", "amount", "transaction_type", "date", "description",
+      "merchant_upi_id", "merchant_name", "account_last_digits", "account_type",
+      "bank_name", "balance_after", "transaction_id", "category",
+      "is_transaction", "is_balance_info",
+    ];
+    for (const field of requiredFields) {
+      expect(prompt, `missing field: ${field}`).toContain(`"${field}"`);
+    }
+  });
+
+  it("_buildExtractionPrompt retains BALANCE EXTRACTION RULES", () => {
+    const emails = [{ from: "a@hdfc.com", date: "2025-01-01", subject: "S1", text: "T1" }];
+    const prompt = Gmail._buildExtractionPrompt(emails);
+    expect(prompt).toContain("BALANCE EXTRACTION RULES");
+    expect(prompt).toContain("NEVER for credit/debit cards");
+  });
+
+  it("_buildExtractionPrompt uses [Individual] for P2P transfers example", () => {
+    const emails = [{ from: "a@hdfc.com", date: "2025-01-01", subject: "S1", text: "T1" }];
+    const prompt = Gmail._buildExtractionPrompt(emails);
+    // MERCHANT EXTRACTION RULES rule 3: transfers to individuals must use [Individual],
+    // never real names
+    expect(prompt).toContain("[Individual]");
+    expect(prompt).toContain("never use real names");
+  });
 });
 
 // ===========================================================================
@@ -545,6 +584,32 @@ describe("Categorization Prompt", () => {
     const prompt = Gmail._buildCategorizationPrompt(transactions, categories);
     expect(prompt).not.toContain("Ashok Kumar");
     expect(prompt).toContain("As***");
+  });
+
+  it("includes Merchant field with merchant_name in transaction section", () => {
+    const categories = [{ name: "Food & Dining", description: "Food" }];
+    const prompt = Gmail._buildCategorizationPrompt(
+      [{ merchant_name: "Swiggy", description: "food delivery", amount: -350, bank_name: "HDFC" }],
+      categories,
+    );
+    expect(prompt).toContain("Merchant: Swiggy");
+    const merchantIdx = prompt.indexOf("Merchant: Swiggy");
+    const descIdx = prompt.indexOf("Description: food delivery");
+    expect(merchantIdx).toBeLessThan(descIdx);
+  });
+
+  it("_buildCategorizationPrompt with no merchant_name shows empty Merchant field", () => {
+    const categories = [{ name: "Other", description: "Other" }];
+    const prompt = Gmail._buildCategorizationPrompt(
+      [{ merchant_name: null, description: "some purchase", amount: -100, bank_name: "HDFC" }],
+      categories,
+    );
+    // Merchant field must be present even when merchant_name is null
+    expect(prompt).toContain("Merchant: \n");
+    // Description field follows immediately after the empty Merchant line
+    const merchantIdx = prompt.indexOf("Merchant: \n");
+    const descIdx = prompt.indexOf("Description: some purchase");
+    expect(merchantIdx).toBeLessThan(descIdx);
   });
 });
 
@@ -1002,7 +1067,7 @@ describe("LLM Call", () => {
 
     await Gmail._callLLM("prompt");
     const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
-    expect(body.model).toBe("llama-3.3-70b-versatile");
+    expect(body.model).toBe("openai/gpt-oss-120b");
   });
 
   it("_callLLM does not send Authorization for Ollama", async () => {
@@ -1108,6 +1173,23 @@ describe("LLM Call", () => {
     await expect(Gmail._callLLM("prompt")).rejects.toThrow(
       "AI provider is temporarily unavailable — try again shortly.",
     );
+  });
+
+  it("sends response_mime_type application/json for Gemini provider", async () => {
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({
+      provider: "gemini",
+      apiKey: "test-key",
+      model: "gemini-2.0-flash-lite",
+    });
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: "[]" }] } }] }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    await Gmail._callLLM("test prompt");
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.generationConfig.response_mime_type).toBe("application/json");
+    expect(body.generationConfig.temperature).toBe(0.1);
   });
 });
 

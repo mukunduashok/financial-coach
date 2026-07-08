@@ -37,9 +37,9 @@ test.describe("Vault settings card", () => {
 		await page.click('[data-action="vault-setup"]');
 		// Modal should appear
 		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
-		// Short passphrase — must be at least 8 characters
-		await page.fill("#vault-setup-passphrase", "short");
-		await page.fill("#vault-setup-confirm", "short");
+		// Short PIN — must be at least 4 characters
+		await page.fill("#vault-setup-passphrase", "abc");
+		await page.fill("#vault-setup-confirm", "abc");
 		await page.click('[data-action="do-setup-vault"]');
 		await expect(page.locator("#vault-setup-error")).toBeVisible({ timeout: 3_000 });
 		// Mismatched passphrases
@@ -67,7 +67,7 @@ test.describe("Vault settings card", () => {
 		// which calls renderSettings() and displays the vault active state.
 		await page.goto("/#/");
 		await page.goto("/#/settings");
-		await expect(page.locator("text=Passphrase protection active")).toBeVisible({
+		await expect(page.locator("text=PIN protection active")).toBeVisible({
 			timeout: 5_000,
 		});
 		await expect(page.locator('[data-action="vault-lock"]')).toBeVisible();
@@ -156,7 +156,7 @@ test.describe("Vault unlock screen", () => {
 		// Navigate to settings - vault should be not configured (no active status)
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
-		await expect(page.locator("text=Passphrase protection active")).not.toBeVisible({
+		await expect(page.locator("text=PIN protection active")).not.toBeVisible({
 			timeout: 3_000,
 		});
 	});

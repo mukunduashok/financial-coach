@@ -608,6 +608,9 @@ document.addEventListener("click", (e) => {
     case "unlock-vault":
       doUnlockVault();
       break;
+    case "unlock-biometric":
+      doUnlockWithBiometric();
+      break;
     case "vault-forgot-passphrase":
       showVaultForgotModal();
       break;
@@ -640,6 +643,18 @@ document.addEventListener("click", (e) => {
       break;
     case "close-vault-forgot-modal":
       document.getElementById("vault-forgot-modal")?.remove();
+      break;
+    case "enable-biometric":
+      doSetupBiometric();
+      break;
+    case "disable-biometric":
+      doDisableBiometric();
+      break;
+    case "do-confirm-biometric-setup":
+      doConfirmBiometricSetup();
+      break;
+    case "close-biometric-setup-modal":
+      document.getElementById("biometric-setup-modal")?.remove();
       break;
   }
 });
@@ -5463,6 +5478,8 @@ async function renderSettings() {
 
   const backupApiKeyEnabled = localStorage.getItem(GDRIVE_BACKUP_API_KEY_KEY) === "true";
   const vaultConfigured = Vault.isConfigured();
+  const biometricAvailable = vaultConfigured ? await API.isBiometricAvailable() : false;
+  const biometricEnabled = vaultConfigured ? API.isBiometricEnabled() : false;
 
   const providerOptions = providerKeys
     .map((k) => {
@@ -5747,22 +5764,39 @@ ${
     <h2>🔒 Credential Vault</h2>
     <p class="text-muted">Your AI API keys and Gmail tokens are AES-256 encrypted.</p>
     <div class="settings-field">
-      <span style="color:var(--color-success,#2ecc71)">&#10003; Passphrase protection active</span>
+      <span style="color:var(--color-success,#2ecc71)">&#10003; PIN protection active</span>
     </div>
     <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap;margin-top:var(--space-md,1rem)">
-      <button class="btn btn-sm" data-action="vault-change-passphrase">Change passphrase</button>
+      <button class="btn btn-sm" data-action="vault-change-passphrase">Change PIN</button>
       <button class="btn btn-sm" data-action="vault-lock">Lock now</button>
       <button class="btn btn-sm btn-danger" data-action="vault-reset">Reset credentials</button>
     </div>
+    <div style="margin-top:var(--space-md,1rem);padding-top:var(--space-md,1rem);border-top:1px solid var(--border)">
+      <p class="text-muted" style="font-size:0.85em;margin-bottom:var(--space-sm,0.5rem)">
+        🫆 Biometric Unlock
+        <span style="cursor:help" title="Biometric is a convenience layer only. Your PIN provides the actual encryption key.">ℹ️</span>
+      </p>
+      ${
+        biometricEnabled
+          ? `<span style="color:var(--color-success,#2ecc71)">✓ Biometric unlock active</span>
+           <button class="btn btn-sm btn-danger" style="margin-left:var(--space-sm,0.5rem)" data-action="disable-biometric">Disable</button>`
+          : biometricAvailable
+            ? `<button class="btn btn-sm" data-action="enable-biometric">Enable Biometric Unlock</button>`
+            : `<span class="text-muted" style="font-size:0.85em">Not supported on this device</span>`
+      }
+    </div>
   </div>`
       : `
-  <div class="card settings-section" style="margin-top: var(--space-lg)">
+  <div class="card settings-section" style="margin-top: var(--space-lg);border-left:3px solid var(--color-primary)">
     <h2>🔒 Credential Vault</h2>
     <p class="text-muted">
       ⚠️ Your API keys and Gmail tokens are stored unencrypted.
-      Protect them with a passphrase.
+      Protect them with a PIN.
     </p>
-    <button class="btn btn-primary btn-sm" data-action="vault-setup">Set up passphrase protection</button>
+    <p class="text-muted" style="font-size:0.85em;margin-top:var(--space-xs,0.25rem)">
+      Once set up, you can also enable biometric unlock (fingerprint / Face ID) for quick access.
+    </p>
+    <button class="btn btn-primary btn-sm" style="margin-top:var(--space-sm,0.5rem)" data-action="vault-setup">Set up PIN protection</button>
   </div>`
   }
 
@@ -6428,6 +6462,7 @@ document.addEventListener("vault-locked", () => {
 function renderVaultUnlock() {
   const existing = document.getElementById("vault-unlock-screen");
   if (existing) return;
+  const biometricEnabled = API.isBiometricEnabled();
   const overlay = document.createElement("div");
   overlay.id = "vault-unlock-screen";
   overlay.className = "modal-overlay";
@@ -6436,22 +6471,32 @@ function renderVaultUnlock() {
   overlay.innerHTML = `
     <div class="card" style="max-width:420px;width:100%;padding:var(--space-xl,2rem)">
       <h2 style="margin-bottom:var(--space-md,1rem)">🔒 Unlock Your Data</h2>
-      <p class="text-muted">Your credentials are protected. Enter your passphrase to continue.</p>
+      <p class="text-muted">Your credentials are protected. Enter your PIN to continue.</p>
+      ${
+        biometricEnabled
+          ? `
+        <button class="btn btn-primary" style="width:100%;margin-bottom:var(--space-md,1rem)"
+                data-action="unlock-biometric">🫆 Unlock with Biometrics</button>
+        <hr style="margin:var(--space-md,1rem) 0">
+      `
+          : ""
+      }
       <div id="vault-unlock-error" class="alert alert-danger" style="display:none;margin-bottom:var(--space-md,1rem)"></div>
       <div class="form-group" style="margin-bottom:var(--space-md,1rem)">
-        <label class="form-label">Passphrase</label>
+        <label class="form-label">PIN</label>
         <input type="password" id="vault-unlock-passphrase" class="form-control"
-               placeholder="Enter passphrase" autocomplete="current-password">
+               placeholder="Enter PIN" autocomplete="current-password">
       </div>
       <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap">
         <button class="btn btn-primary" data-action="unlock-vault">Unlock</button>
-        <button class="btn btn-link" data-action="vault-forgot-passphrase" style="margin-left:auto">Forgot passphrase?</button>
+        <button class="btn btn-link" data-action="vault-forgot-passphrase" style="margin-left:auto">Forgot PIN?</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector("#vault-unlock-passphrase").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doUnlockVault();
   });
+  if (biometricEnabled) doUnlockWithBiometric();
 }
 
 async function doUnlockVault() {
@@ -6460,7 +6505,7 @@ async function doUnlockVault() {
   if (!input) return;
   const passphrase = input.value.trim();
   if (!passphrase) {
-    errEl.textContent = "Please enter your passphrase.";
+    errEl.textContent = "Please enter your PIN.";
     errEl.style.display = "";
     return;
   }
@@ -6471,13 +6516,81 @@ async function doUnlockVault() {
       if (overlay) overlay.remove();
       document.dispatchEvent(new Event("db-ready"));
     } else {
-      errEl.textContent = "Incorrect passphrase. Please try again.";
+      errEl.textContent = "Incorrect PIN. Please try again.";
       errEl.style.display = "";
       input.value = "";
       input.focus();
     }
   } catch (err) {
     errEl.textContent = `Unlock failed: ${err.message}`;
+    errEl.style.display = "";
+  }
+}
+
+async function doUnlockWithBiometric() {
+  const errEl = document.getElementById("vault-unlock-error");
+  try {
+    const ok = await API.unlockWithBiometric();
+    if (ok) {
+      const overlay = document.getElementById("vault-unlock-screen");
+      if (overlay) overlay.remove();
+      document.dispatchEvent(new Event("db-ready"));
+    } else {
+      if (errEl) {
+        errEl.textContent = "Biometric unlock failed. Please enter your passphrase.";
+        errEl.style.display = "";
+      }
+    }
+  } catch (err) {
+    if (errEl) {
+      errEl.textContent = `Biometric error: ${err.message}`;
+      errEl.style.display = "";
+    }
+  }
+}
+
+async function doDisableBiometric() {
+  API.disableBiometric();
+  showToast("Biometric unlock disabled.", "info");
+  if (window.location.hash.startsWith("#/settings")) await renderSettings();
+}
+
+function doSetupBiometric() {
+  const html = `
+    <div id="biometric-setup-modal" class="modal-overlay" style="z-index:10000">
+      <div class="modal">
+        <h3>Enable Biometric Unlock</h3>
+        <p>Your device will ask for fingerprint or face verification to confirm setup.</p>
+        <p class="text-muted" style="font-size:0.85em">Biometric is a convenience layer only — your passphrase remains the primary security key.</p>
+        <div id="biometric-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <div class="form-group">
+          <label class="form-label">Confirm your current passphrase</label>
+          <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter passphrase">
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-primary" data-action="do-confirm-biometric-setup">Enable</button>
+          <button class="btn btn-secondary" data-action="close-biometric-setup-modal">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML("beforeend", html);
+}
+
+async function doConfirmBiometricSetup() {
+  const passphrase = document.getElementById("biometric-setup-passphrase")?.value || "";
+  const errEl = document.getElementById("biometric-setup-error");
+  if (!passphrase) {
+    errEl.textContent = "Please enter your passphrase.";
+    errEl.style.display = "";
+    return;
+  }
+  try {
+    await API.setupBiometric(passphrase);
+    document.getElementById("biometric-setup-modal")?.remove();
+    showToast("Biometric unlock enabled.", "success");
+    if (window.location.hash.startsWith("#/settings")) await renderSettings();
+  } catch (err) {
+    errEl.textContent = err.message || "Failed to enable biometric unlock.";
     errEl.style.display = "";
   }
 }
@@ -6503,19 +6616,19 @@ function showVaultSetupModal() {
     <div id="vault-setup-modal" class="modal-overlay" style="z-index:10000">
       <div class="modal">
         <h3>🔒 Protect Your Credentials</h3>
-        <p>Encrypt your AI API keys and Gmail tokens with a passphrase so they are never stored in plaintext.</p>
-        <p class="text-muted">If you forget the passphrase, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
+        <p>Encrypt your API keys and Gmail tokens with a PIN so they are never stored in plaintext.</p>
+        <p class="text-muted">If you forget your PIN, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
         <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
-          <label class="form-label">Passphrase <span class="text-muted">(min 8 characters)</span></label>
-          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a passphrase" autocomplete="new-password">
+          <label class="form-label">PIN <span class="text-muted">(min 4 digits/characters)</span></label>
+          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password">
         </div>
         <div class="form-group">
-          <label class="form-label">Confirm passphrase</label>
-          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat passphrase" autocomplete="new-password">
+          <label class="form-label">Confirm PIN</label>
+          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat PIN" autocomplete="new-password">
         </div>
         <div class="modal-actions">
-          <button class="btn btn-primary" data-action="do-setup-vault">Set passphrase</button>
+          <button class="btn btn-primary" data-action="do-setup-vault">Set PIN</button>
           <button class="btn btn-secondary" data-action="close-vault-setup-modal">Skip for now</button>
         </div>
       </div>
@@ -6527,47 +6640,48 @@ async function doSetupVault() {
   const passphrase = document.getElementById("vault-setup-passphrase")?.value || "";
   const confirm = document.getElementById("vault-setup-confirm")?.value || "";
   const errEl = document.getElementById("vault-setup-error");
-  if (passphrase.length < 8) {
-    errEl.textContent = "Passphrase must be at least 8 characters.";
+  if (passphrase.length < 4) {
+    errEl.textContent = "PIN must be at least 4 characters.";
     errEl.style.display = "";
     return;
   }
   if (passphrase !== confirm) {
-    errEl.textContent = "Passphrases do not match.";
+    errEl.textContent = "PINs do not match.";
     errEl.style.display = "";
     return;
   }
   try {
     await API.setupVault(passphrase);
-    document.getElementById("vault-setup-modal")?.remove();
-    showToast("Credentials are now encrypted.", "success");
-    if (window.location.hash.startsWith("#/settings")) await renderSettings();
   } catch (err) {
-    errEl.textContent = `Failed to set up vault: ${err.message}`;
+    errEl.textContent = `Failed to set up PIN: ${err.message}`;
     errEl.style.display = "";
+    return;
   }
+  document.getElementById("vault-setup-modal")?.remove();
+  Toast.success("Credentials are now PIN-protected.");
+  if (window.location.hash.startsWith("#/settings")) await renderSettings();
 }
 
 function showChangePassphraseModal() {
   const html = `
     <div id="vault-change-modal" class="modal-overlay" style="z-index:10000">
       <div class="modal">
-        <h3>Change Passphrase</h3>
+        <h3>Change PIN</h3>
         <div id="vault-change-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
-          <label class="form-label">Current passphrase</label>
+          <label class="form-label">Current PIN</label>
           <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password">
         </div>
         <div class="form-group">
-          <label class="form-label">New passphrase <span class="text-muted">(min 8 characters)</span></label>
+          <label class="form-label">New PIN <span class="text-muted">(min 4 digits/characters)</span></label>
           <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password">
         </div>
         <div class="form-group">
-          <label class="form-label">Confirm new passphrase</label>
+          <label class="form-label">Confirm new PIN</label>
           <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password">
         </div>
         <div class="modal-actions">
-          <button class="btn btn-primary" data-action="do-change-passphrase">Update passphrase</button>
+          <button class="btn btn-primary" data-action="do-change-passphrase">Update PIN</button>
           <button class="btn btn-secondary" data-action="close-vault-change-modal">Cancel</button>
         </div>
       </div>
@@ -6580,24 +6694,26 @@ async function doChangePassphrase() {
   const newP = document.getElementById("vault-change-new")?.value || "";
   const confirmP = document.getElementById("vault-change-confirm")?.value || "";
   const errEl = document.getElementById("vault-change-error");
-  if (newP.length < 8) {
-    errEl.textContent = "New passphrase must be at least 8 characters.";
+  if (newP.length < 4) {
+    errEl.textContent = "New PIN must be at least 4 characters.";
     errEl.style.display = "";
     return;
   }
   if (newP !== confirmP) {
-    errEl.textContent = "New passphrases do not match.";
+    errEl.textContent = "New PINs do not match.";
     errEl.style.display = "";
     return;
   }
   try {
     await API.changeVaultPassphrase(oldP, newP);
-    document.getElementById("vault-change-modal")?.remove();
-    showToast("Passphrase updated.", "success");
   } catch (err) {
-    errEl.textContent = err.message || "Failed to change passphrase.";
+    errEl.textContent = err.message || "Failed to change PIN.";
     errEl.style.display = "";
+    return;
   }
+  document.getElementById("vault-change-modal")?.remove();
+  Toast.success("PIN updated.");
+  if (window.location.hash.startsWith("#/settings")) await renderSettings();
 }
 
 async function doResetVault() {
@@ -6682,4 +6798,6 @@ Object.assign(window, {
   onboardingAdvance,
   renderOnboardingStep,
   detectPaymentType,
+  doUnlockWithBiometric,
+  doSetupBiometric,
 });

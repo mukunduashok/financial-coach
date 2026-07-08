@@ -333,6 +333,49 @@ export const API = {
   async changeVaultPassphrase(oldPassphrase, newPassphrase) {
     await Vault.changePassphrase(oldPassphrase, newPassphrase);
   },
+
+  // ---- Vault Biometric ----
+  async isBiometricAvailable() {
+    return Vault.isBiometricAvailable();
+  },
+  isBiometricEnabled() {
+    return Vault.isBiometricEnabled();
+  },
+  async setupBiometric(passphrase) {
+    return Vault.setupBiometric(passphrase);
+  },
+  async unlockWithBiometric() {
+    const ok = await Vault.unlockWithBiometric();
+    if (!ok) return false;
+
+    // Populate in-memory caches (same as unlockVault)
+    const aiSettings = await Vault.loadAISettings();
+    if (aiSettings) AI.setDecrypted(aiSettings);
+
+    const gmailSettings = await Vault.loadGmailSettings();
+    if (gmailSettings) Gmail.setDecrypted(gmailSettings);
+
+    // Migrate OAuth redirect tokens that landed in plaintext localStorage
+    // (iOS PWA redirect flow writes there before vault check runs)
+    const plaintextGmail = localStorage.getItem(GMAIL_SETTINGS_KEY);
+    if (plaintextGmail) {
+      try {
+        const tempTokens = JSON.parse(plaintextGmail);
+        if (tempTokens?.accessToken) {
+          await Vault.saveGmailSettings(tempTokens);
+          Gmail.setDecrypted(tempTokens);
+          localStorage.removeItem(GMAIL_SETTINGS_KEY);
+        }
+      } catch {
+        /* ignore corrupt temp data */
+      }
+    }
+
+    return true;
+  },
+  disableBiometric() {
+    Vault.disableBiometric();
+  },
 };
 
 window.API = API;

@@ -8,6 +8,9 @@ import {
   AI_SETTINGS_KEY,
   GMAIL_SETTINGS_KEY,
   VAULT_AI_KEY,
+  VAULT_BIOMETRIC_CRED_KEY,
+  VAULT_BIOMETRIC_WRAP_KEY,
+  VAULT_BIOMETRIC_WRAPPED_KEY,
   VAULT_GMAIL_KEY,
   VAULT_SALT_KEY,
   VAULT_SENTINEL_KEY,
@@ -215,5 +218,118 @@ export const Vault = {
     // Re-encrypt existing credentials under new key
     if (aiSettings) await this.saveAISettings(aiSettings);
     if (gmailSettings) await this.saveGmailSettings(gmailSettings);
+
+    // Clear biometric so stale credentials are not reused after a PIN change
+    this.disableBiometric();
+  },
+
+  async isBiometricAvailable() {
+    if (!globalThis.navigator?.credentials || !globalThis.PublicKeyCredential) return false;
+    try {
+      return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    } catch {
+      return false;
+    }
+  },
+
+  isBiometricEnabled() {
+    return !!localStorage.getItem(VAULT_BIOMETRIC_CRED_KEY);
+  },
+
+  async setupBiometric(passphrase) {
+    // Step 1: verify passphrase
+    const ok = await this.unlock(passphrase);
+    if (!ok) throw new Error("Incorrect passphrase");
+
+    // Step 2: register platform credential
+    const credential = await navigator.credentials.create({
+      publicKey: {
+        rp: { id: location.hostname, name: "Financial Coach" },
+        user: {
+          id: globalThis.crypto.getRandomValues(new Uint8Array(32)),
+          name: "fincoach-user",
+          displayName: "Financial Coach User",
+        },
+        challenge: globalThis.crypto.getRandomValues(new Uint8Array(32)),
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+        authenticatorSelection: {
+          authenticatorAttachment: "platform",
+          userVerification: "required",
+        },
+      },
+    });
+
+    // Step 3: store credential ID
+    localStorage.setItem(VAULT_BIOMETRIC_CRED_KEY, _toBase64(credential.rawId));
+
+    // Step 4: generate wrap key
+    const wrapBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    const wrapKey = await globalThis.crypto.subtle.importKey("raw", wrapBytes, "AES-GCM", false, [
+      "encrypt",
+      "decrypt",
+    ]);
+
+    // Step 5: encrypt passphrase with wrap key
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const ciphertext = await globalThis.crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      wrapKey,
+      new TextEncoder().encode(passphrase),
+    );
+    const combined = new Uint8Array(IV_LENGTH + ciphertext.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(ciphertext), IV_LENGTH);
+
+    // Step 6: store wrap key and wrapped passphrase
+    localStorage.setItem(VAULT_BIOMETRIC_WRAP_KEY, _toBase64(wrapBytes));
+    localStorage.setItem(VAULT_BIOMETRIC_WRAPPED_KEY, _toBase64(combined));
+  },
+
+  async unlockWithBiometric() {
+    const credIdB64 = localStorage.getItem(VAULT_BIOMETRIC_CRED_KEY);
+    if (!credIdB64) return false;
+
+    // Step 1: biometric challenge
+    try {
+      await navigator.credentials.get({
+        publicKey: {
+          allowCredentials: [{ id: _fromBase64(credIdB64), type: "public-key" }],
+          userVerification: "required",
+          challenge: globalThis.crypto.getRandomValues(new Uint8Array(32)),
+        },
+      });
+    } catch {
+      return false;
+    }
+
+    // Step 2: decrypt stored passphrase using wrap key
+    const wrapB64 = localStorage.getItem(VAULT_BIOMETRIC_WRAP_KEY);
+    const wrappedB64 = localStorage.getItem(VAULT_BIOMETRIC_WRAPPED_KEY);
+    if (!wrapB64 || !wrappedB64) return false;
+
+    try {
+      const wrapBytes = _fromBase64(wrapB64);
+      const wrapKey = await globalThis.crypto.subtle.importKey("raw", wrapBytes, "AES-GCM", false, [
+        "decrypt",
+      ]);
+      const combined = _fromBase64(wrappedB64);
+      const iv = combined.slice(0, IV_LENGTH);
+      const ciphertext = combined.slice(IV_LENGTH);
+      const plaintext = await globalThis.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv },
+        wrapKey,
+        ciphertext,
+      );
+      const passphrase = new TextDecoder().decode(plaintext);
+      return await this.unlock(passphrase);
+    } catch {
+      return false;
+    }
+  },
+
+  disableBiometric() {
+    localStorage.removeItem(VAULT_BIOMETRIC_CRED_KEY);
+    localStorage.removeItem(VAULT_BIOMETRIC_WRAP_KEY);
+    localStorage.removeItem(VAULT_BIOMETRIC_WRAPPED_KEY);
   },
 };

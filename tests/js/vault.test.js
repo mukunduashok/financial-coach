@@ -33,7 +33,17 @@ vi.mock("../../static/js/config.js", () => ({
 	VAULT_GMAIL_KEY: "fincoach-vault-gmail",
 	AI_SETTINGS_KEY: "fincoach-ai-settings",
 	GMAIL_SETTINGS_KEY: "fincoach-gmail-settings",
+	VAULT_BIOMETRIC_CRED_KEY: "fincoach-vault-biometric-cred",
+	VAULT_BIOMETRIC_WRAP_KEY: "fincoach-vault-biometric-wrap",
+	VAULT_BIOMETRIC_WRAPPED_KEY: "fincoach-vault-biometric-wrapped",
 }));
+
+const mockCreate = vi.fn();
+const mockGet = vi.fn();
+globalThis.navigator = { credentials: { create: mockCreate, get: mockGet } };
+globalThis.PublicKeyCredential = {
+	isUserVerifyingPlatformAuthenticatorAvailable: vi.fn().mockResolvedValue(true),
+};
 
 const { Vault } = await import("../../static/js/vault.js");
 
@@ -43,6 +53,8 @@ const { Vault } = await import("../../static/js/vault.js");
 function resetVault() {
 	localStorageData = {};
 	Vault._key = null;
+	mockCreate.mockReset();
+	mockGet.mockReset();
 }
 
 beforeEach(resetVault);
@@ -312,5 +324,130 @@ describe("changePassphrase()", () => {
 		await Vault.unlock("new-pass");
 		const loaded = await Vault.loadGmailSettings();
 		expect(loaded).toEqual(gmailSettings);
+	});
+
+	it("clears biometric keys after passphrase change", async () => {
+		await Vault.setup("old-pass");
+		// Manually set biometric keys
+		localStorageData["fincoach-vault-biometric-cred"] = "cred";
+		localStorageData["fincoach-vault-biometric-wrap"] = "wrap";
+		localStorageData["fincoach-vault-biometric-wrapped"] = "wrapped";
+		await Vault.changePassphrase("old-pass", "new-pass");
+		expect(localStorageData["fincoach-vault-biometric-cred"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-biometric-wrap"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeUndefined();
+	});
+});
+
+// ===========================================================================
+// 11. isBiometricAvailable()
+// ===========================================================================
+describe("isBiometricAvailable()", () => {
+	it("returns true when platform authenticator is available", async () => {
+		globalThis.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable.mockResolvedValue(
+			true,
+		);
+		const result = await Vault.isBiometricAvailable();
+		expect(result).toBe(true);
+	});
+
+	it("returns false when platform authenticator is not available", async () => {
+		globalThis.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable.mockResolvedValue(
+			false,
+		);
+		const result = await Vault.isBiometricAvailable();
+		expect(result).toBe(false);
+	});
+
+	it("returns false when navigator.credentials is missing", async () => {
+		const savedNav = globalThis.navigator;
+		globalThis.navigator = {};
+		const result = await Vault.isBiometricAvailable();
+		expect(result).toBe(false);
+		globalThis.navigator = savedNav;
+	});
+});
+
+// ===========================================================================
+// 12. isBiometricEnabled()
+// ===========================================================================
+describe("isBiometricEnabled()", () => {
+	it("returns false before setupBiometric", () => {
+		expect(Vault.isBiometricEnabled()).toBe(false);
+	});
+
+	it("returns true after setupBiometric succeeds", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue({ rawId: new Uint8Array([1, 2, 3]) });
+		await Vault.setupBiometric("mypass");
+		expect(Vault.isBiometricEnabled()).toBe(true);
+	});
+});
+
+// ===========================================================================
+// 13. setupBiometric()
+// ===========================================================================
+describe("setupBiometric()", () => {
+	it("throws 'Incorrect passphrase' when passphrase is wrong", async () => {
+		await Vault.setup("correct");
+		Vault.lock();
+		await expect(Vault.setupBiometric("wrong")).rejects.toThrow("Incorrect passphrase");
+	});
+
+	it("stores all 3 biometric keys on success", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue({ rawId: new Uint8Array([1, 2, 3]) });
+		await Vault.setupBiometric("mypass");
+		expect(localStorageData["fincoach-vault-biometric-cred"]).toBeTruthy();
+		expect(localStorageData["fincoach-vault-biometric-wrap"]).toBeTruthy();
+		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeTruthy();
+	});
+});
+
+// ===========================================================================
+// 14. unlockWithBiometric()
+// ===========================================================================
+describe("unlockWithBiometric()", () => {
+	it("returns false when no credential is stored", async () => {
+		const result = await Vault.unlockWithBiometric();
+		expect(result).toBe(false);
+	});
+
+	it("returns true on successful biometric authentication", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue({ rawId: new Uint8Array([1, 2, 3]) });
+		await Vault.setupBiometric("mypass");
+		Vault.lock();
+		mockGet.mockResolvedValue({});
+		const result = await Vault.unlockWithBiometric();
+		expect(result).toBe(true);
+		expect(Vault.isUnlocked()).toBe(true);
+	});
+
+	it("returns false when credentials.get is rejected (user cancels)", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue({ rawId: new Uint8Array([1, 2, 3]) });
+		await Vault.setupBiometric("mypass");
+		Vault.lock();
+		mockGet.mockRejectedValue(new Error("NotAllowedError"));
+		const result = await Vault.unlockWithBiometric();
+		expect(result).toBe(false);
+	});
+});
+
+// ===========================================================================
+// 15. disableBiometric()
+// ===========================================================================
+describe("disableBiometric()", () => {
+	it("removes all 3 biometric keys from localStorage", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue({ rawId: new Uint8Array([1, 2, 3]) });
+		await Vault.setupBiometric("mypass");
+		expect(Vault.isBiometricEnabled()).toBe(true);
+		Vault.disableBiometric();
+		expect(localStorageData["fincoach-vault-biometric-cred"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-biometric-wrap"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeUndefined();
+		expect(Vault.isBiometricEnabled()).toBe(false);
 	});
 });
