@@ -1052,6 +1052,35 @@ describe("LLM Call", () => {
     expect(call[1].headers.Authorization).toBe("Bearer test-key");
   });
 
+  it("_callLLM uses vault-decrypted settings when vault is unlocked", async () => {
+    // Simulate vault unlocked: AI._decrypted set, localStorage empty
+    const { AI } = await import("../../static/js/ai.js");
+    AI.setDecrypted({
+      provider: "groq",
+      apiKey: "vault-key",
+      model: "test-model",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "vault response" } }] }),
+    });
+
+    const result = await Gmail._callLLM("vault prompt");
+    expect(result).toBe("vault response");
+
+    const call = globalThis.fetch.mock.calls[0];
+    const body = JSON.parse(call[1].body);
+    expect(call[1].headers.Authorization).toBe("Bearer vault-key");
+
+    // Cleanup
+    AI.setDecrypted(null);
+  });
+
   it("_callLLM uses default model when none specified", async () => {
     localStorageData["fincoach-ai-settings"] = JSON.stringify({
       provider: "groq",

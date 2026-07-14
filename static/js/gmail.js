@@ -5,8 +5,9 @@
  * from Gmail API, parses them, and uses LLM for transaction extraction.
  * Ported from app/services/gmail_service.py and app/agents/prompts.py.
  */
+
+import { AI } from "./ai.js";
 import {
-  AI_SETTINGS_KEY,
   GMAIL_AUTO_SYNC_ENABLED_KEY,
   GMAIL_AUTO_SYNC_INTERVAL_MS,
   GMAIL_AUTO_SYNC_LAST_KEY,
@@ -665,12 +666,7 @@ export const Gmail = {
   // Heuristic Helpers (no-LLM fallback)
   // ==========================================================================
   _isLLMConfigured() {
-    try {
-      const s = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY) || "{}");
-      return !!s.provider;
-    } catch {
-      return false;
-    }
+    return !!AI.getSettings().provider;
   },
 
   _extractWithRegex(parsedEmail) {
@@ -754,10 +750,9 @@ export const Gmail = {
   // LLM Calls
   // ==========================================================================
   async _callLLM(prompt) {
-    const settingsStr = localStorage.getItem(AI_SETTINGS_KEY);
-    if (!settingsStr)
+    const settings = AI.getSettings();
+    if (!settings.provider)
       throw new Error("AI not configured. Go to Settings to set up your AI provider.");
-    const settings = JSON.parse(settingsStr);
     const { provider, apiKey, model, azureResourceName, azureDeploymentName, azureApiVersion } =
       settings;
 
