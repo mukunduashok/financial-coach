@@ -12,6 +12,7 @@ import {
   GMAIL_AUTO_SYNC_INTERVAL_MS,
   GMAIL_AUTO_SYNC_LAST_KEY,
   GMAIL_CUSTOM_SENDERS_KEY,
+  GMAIL_OAUTH_PENDING_RESULT_KEY,
   GMAIL_OAUTH_PENDING_STATE_KEY,
   GMAIL_OAUTH_STATE_TTL_MS,
   GMAIL_PROXY_URL,
@@ -171,7 +172,9 @@ export const Gmail = {
       await Vault.saveGmailSettings(merged);
       return;
     }
-    // Plaintext path: persist to localStorage.
+    if (merged.accessToken || merged.refreshToken) {
+      throw new Error("Unlock the credential vault before storing Gmail credentials.");
+    }
     localStorage.setItem(GMAIL_SETTINGS_KEY, JSON.stringify(merged));
   },
 
@@ -196,6 +199,23 @@ export const Gmail = {
 
   _clearPendingOAuthState() {
     sessionStorage.removeItem(GMAIL_OAUTH_PENDING_STATE_KEY);
+  },
+
+  storePendingOAuthResult(result) {
+    sessionStorage.setItem(GMAIL_OAUTH_PENDING_RESULT_KEY, JSON.stringify(result));
+  },
+
+  loadPendingOAuthResult() {
+    try {
+      const raw = sessionStorage.getItem(GMAIL_OAUTH_PENDING_RESULT_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  clearPendingOAuthResult() {
+    sessionStorage.removeItem(GMAIL_OAUTH_PENDING_RESULT_KEY);
   },
 
   consumePendingOAuthState(rawState) {
@@ -228,6 +248,14 @@ export const Gmail = {
   },
 
   async connect() {
+    const { Vault } = await import("./vault.js");
+    if (!Vault.isConfigured()) {
+      throw new Error("Set up a PIN before connecting Gmail.");
+    }
+    if (!Vault.isUnlocked()) {
+      throw new Error("Unlock your PIN before connecting Gmail.");
+    }
+
     const isStandalonePwa = navigator.standalone === true;
     const state = this._createPendingOAuthState();
     let authUrl;
@@ -269,13 +297,7 @@ export const Gmail = {
         }
 
         if (event.data.status === "success") {
-          const tokenExpiry = Date.now() + (event.data.expires_in || 3600) * 1000;
-          await Gmail.saveSettings({
-            accessToken: event.data.access_token,
-            refreshToken: event.data.refresh_token,
-            tokenExpiry,
-          });
-          Gmail._fetchAndStoreSub(); // fire and forget
+          await Gmail.completeOAuthResult(event.data.auth_result_id, event.data.state || "");
           resolve({ connected: true });
         } else {
           reject(new Error(event.data.error || "OAuth failed"));
@@ -315,6 +337,47 @@ export const Gmail = {
       }
       window.addEventListener("focus", onFocus);
     });
+  },
+
+  async completeOAuthResult(authResultId, state) {
+    if (!authResultId) throw new Error("Missing OAuth result handle.");
+
+    const resp = await fetchWithTimeout(`${GMAIL_PROXY_URL}/auth/consume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auth_result_id: authResultId, state }),
+    });
+
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch {
+      data = null;
+    }
+
+    if (!resp.ok) {
+      throw new Error(data?.error || "Failed to complete Gmail authentication.");
+    }
+
+    const tokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
+    await this.saveSettings({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      tokenExpiry,
+    });
+    this._fetchAndStoreSub();
+    return { connected: true };
+  },
+
+  async finalizePendingOAuthResult() {
+    const pending = this.loadPendingOAuthResult();
+    if (!pending?.authResultId || !pending?.state) return null;
+
+    try {
+      return await this.completeOAuthResult(pending.authResultId, pending.state);
+    } finally {
+      this.clearPendingOAuthResult();
+    }
   },
 
   async _refreshToken() {

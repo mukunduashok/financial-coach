@@ -621,6 +621,7 @@ document.addEventListener("click", (e) => {
       doSetupVault();
       break;
     case "close-vault-setup-modal":
+      clearPendingGmailConnect();
       document.getElementById("vault-setup-modal")?.remove();
       break;
     case "vault-change-passphrase":
@@ -2496,6 +2497,29 @@ async function createTransaction() {
 // ============================================================================
 
 let syncMode = "days"; // "days" or "range"
+const GMAIL_CONNECT_PENDING_KEY = "fincoach-gmail-connect-pending";
+
+function markPendingGmailConnect() {
+  sessionStorage.setItem(GMAIL_CONNECT_PENDING_KEY, "1");
+}
+
+function clearPendingGmailConnect() {
+  sessionStorage.removeItem(GMAIL_CONNECT_PENDING_KEY);
+}
+
+async function continuePendingGmailConnect() {
+  if (sessionStorage.getItem(GMAIL_CONNECT_PENDING_KEY) !== "1") return;
+  clearPendingGmailConnect();
+
+  try {
+    const status = await API.getGmailStatus();
+    if (status?.connected) return;
+  } catch {
+    // If status lookup fails, fall through and retry the connect flow.
+  }
+
+  await connectGmail();
+}
 
 async function renderSync() {
   const screen = getScreen();
@@ -2597,13 +2621,25 @@ function setSyncMode(mode, btn) {
 }
 
 async function connectGmail() {
+  if (!API.isVaultConfigured()) {
+    markPendingGmailConnect();
+    showVaultSetupModal();
+    Toast.error("Set up a PIN before connecting Gmail.");
+    return;
+  }
+  if (!API.isVaultUnlocked()) {
+    markPendingGmailConnect();
+    renderVaultUnlock();
+    Toast.error("Unlock your PIN before connecting Gmail.");
+    return;
+  }
+
+  clearPendingGmailConnect();
+
   try {
     const result = await API.getGmailConnectUrl();
     if (result?.connected) {
       Toast.success("Gmail connected!");
-      if (!API.isVaultConfigured()) {
-        showVaultSetupModal();
-      }
       // Re-render whichever screen is currently active instead of always going to Sync
       const renderFn = Router.routes[Router.currentScreen];
       if (renderFn) await renderFn();
@@ -6515,6 +6551,7 @@ async function doUnlockVault() {
       const overlay = document.getElementById("vault-unlock-screen");
       if (overlay) overlay.remove();
       document.dispatchEvent(new Event("db-ready"));
+      await continuePendingGmailConnect();
     } else {
       errEl.textContent = "Incorrect PIN. Please try again.";
       errEl.style.display = "";
@@ -6535,6 +6572,7 @@ async function doUnlockWithBiometric() {
       const overlay = document.getElementById("vault-unlock-screen");
       if (overlay) overlay.remove();
       document.dispatchEvent(new Event("db-ready"));
+      await continuePendingGmailConnect();
     } else {
       if (errEl) {
         errEl.textContent = "Biometric unlock failed. Please enter your passphrase.";
@@ -6660,6 +6698,7 @@ async function doSetupVault() {
   document.getElementById("vault-setup-modal")?.remove();
   Toast.success("Credentials are now PIN-protected.");
   if (window.location.hash.startsWith("#/settings")) await renderSettings();
+  await continuePendingGmailConnect();
 }
 
 function showChangePassphraseModal() {

@@ -9,6 +9,28 @@ import { Gmail } from "./gmail.js";
 import { validateGmailSender } from "./utils.js";
 import { Vault } from "./vault.js";
 
+async function hydrateVaultState() {
+  const aiSettings = await Vault.loadAISettings();
+  if (aiSettings) AI.setDecrypted(aiSettings);
+
+  const gmailSettings = await Vault.loadGmailSettings();
+  if (gmailSettings) Gmail.setDecrypted(gmailSettings);
+}
+
+async function finalizePendingGmailOAuth() {
+  try {
+    const result = await Gmail.finalizePendingOAuthResult();
+    if (result?.connected) {
+      sessionStorage.setItem("gmail-oauth-redirect-success", "1");
+    }
+  } catch (err) {
+    sessionStorage.setItem(
+      "gmail-oauth-redirect-error",
+      err?.message || "Failed to complete Gmail authentication.",
+    );
+  }
+}
+
 export const API = {
   // ---- Accounts ----
   getAccounts(includeAll = false) {
@@ -275,26 +297,8 @@ export const API = {
     const ok = await Vault.unlock(passphrase);
     if (!ok) return false;
 
-    // Populate in-memory caches
-    const aiSettings = await Vault.loadAISettings();
-    if (aiSettings) AI.setDecrypted(aiSettings);
-
-    const gmailSettings = await Vault.loadGmailSettings();
-    if (gmailSettings) Gmail.setDecrypted(gmailSettings);
-
-    // Migrate OAuth redirect tokens that landed in plaintext localStorage
-    // (iOS PWA redirect flow writes there before vault check runs)
-    const plaintextGmail = localStorage.getItem(GMAIL_SETTINGS_KEY);
-    if (plaintextGmail) {
-      try {
-        const tempTokens = JSON.parse(plaintextGmail);
-        const merged = { ...(gmailSettings || {}), ...tempTokens };
-        await Vault.saveGmailSettings(merged);
-        Gmail.setDecrypted(merged);
-      } catch {
-        /* ignore corrupt temp data */
-      }
-    }
+    await hydrateVaultState();
+    await finalizePendingGmailOAuth();
 
     return true;
   },
@@ -348,28 +352,8 @@ export const API = {
     const ok = await Vault.unlockWithBiometric();
     if (!ok) return false;
 
-    // Populate in-memory caches (same as unlockVault)
-    const aiSettings = await Vault.loadAISettings();
-    if (aiSettings) AI.setDecrypted(aiSettings);
-
-    const gmailSettings = await Vault.loadGmailSettings();
-    if (gmailSettings) Gmail.setDecrypted(gmailSettings);
-
-    // Migrate OAuth redirect tokens that landed in plaintext localStorage
-    // (iOS PWA redirect flow writes there before vault check runs)
-    const plaintextGmail = localStorage.getItem(GMAIL_SETTINGS_KEY);
-    if (plaintextGmail) {
-      try {
-        const tempTokens = JSON.parse(plaintextGmail);
-        if (tempTokens?.accessToken) {
-          await Vault.saveGmailSettings(tempTokens);
-          Gmail.setDecrypted(tempTokens);
-          localStorage.removeItem(GMAIL_SETTINGS_KEY);
-        }
-      } catch {
-        /* ignore corrupt temp data */
-      }
-    }
+    await hydrateVaultState();
+    await finalizePendingGmailOAuth();
 
     return true;
   },

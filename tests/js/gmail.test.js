@@ -36,6 +36,7 @@ const { DB } = await import("../../static/js/db.js");
 vi.mock("../../static/js/config.js", () => ({
 	GMAIL_PROXY_URL: "https://proxy.example.com",
 	GMAIL_SETTINGS_KEY: "fincoach-gmail-settings",
+	GMAIL_OAUTH_PENDING_RESULT_KEY: "fincoach-gmail-oauth-pending-result",
 	GMAIL_OAUTH_PENDING_STATE_KEY: "fincoach-gmail-oauth-pending-state",
 	GMAIL_OAUTH_STATE_TTL_MS: 300_000,
 	AI_SETTINGS_KEY: "fincoach-ai-settings",
@@ -48,18 +49,18 @@ vi.mock("../../static/js/config.js", () => ({
 	VAULT_AI_KEY: "fincoach-vault-ai",
 	VAULT_GMAIL_KEY: "fincoach-vault-gmail",
 }));
-
-// Mock vault.js — simulate vault not configured so plaintext path is taken
+// Mock vault.js — default to configured+unlocked so Gmail token storage stays encrypted.
 vi.mock("../../static/js/vault.js", () => ({
 	Vault: {
-		isConfigured: vi.fn(() => false),
-		isUnlocked: vi.fn(() => false),
+		isConfigured: vi.fn(() => true),
+		isUnlocked: vi.fn(() => true),
 		saveGmailSettings: vi.fn(),
 	},
 }));
 
 // Now import Gmail (after DB is available)
 const { Gmail } = await import("../../static/js/gmail.js");
+const { Vault } = await import("../../static/js/vault.js");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +96,9 @@ beforeEach(async () => {
   localStorageData = {};
   sessionStorage.clear();
   vi.restoreAllMocks();
+  Vault.isConfigured.mockReturnValue(true);
+  Vault.isUnlocked.mockReturnValue(true);
+  Vault.saveGmailSettings.mockResolvedValue(undefined);
   globalThis.fetch = originalFetch;
   globalThis.open = originalOpen;
   Gmail.clearDecrypted();
@@ -118,17 +122,26 @@ describe("Gmail Settings", () => {
   });
 
   it("saves and loads settings", async () => {
-    await Gmail.saveSettings({ accessToken: "tok123" });
+    await Gmail.saveSettings({ email: "user@example.com" });
     const s = Gmail.getSettings();
-    expect(s.accessToken).toBe("tok123");
+    expect(s.email).toBe("user@example.com");
   });
 
   it("merges settings without overwriting existing keys", async () => {
-    await Gmail.saveSettings({ accessToken: "tok123" });
-    await Gmail.saveSettings({ refreshToken: "ref456" });
+    await Gmail.saveSettings({ email: "user@example.com" });
+    await Gmail.saveSettings({ sub: "sub-123" });
     const s = Gmail.getSettings();
-    expect(s.accessToken).toBe("tok123");
-    expect(s.refreshToken).toBe("ref456");
+    expect(s.email).toBe("user@example.com");
+    expect(s.sub).toBe("sub-123");
+  });
+
+  it("rejects token persistence when the vault is unavailable", async () => {
+    Vault.isConfigured.mockReturnValue(false);
+    Vault.isUnlocked.mockReturnValue(false);
+
+    await expect(Gmail.saveSettings({ accessToken: "tok123" })).rejects.toThrow(
+      "Unlock the credential vault before storing Gmail credentials.",
+    );
   });
 });
 
@@ -160,10 +173,16 @@ describe("Gmail OAuth", () => {
   });
 
   it("connect fetches auth URL from proxy", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ auth_url: "https://accounts.google.com/o/oauth2/auth?..." }),
-    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+	      ok: true,
+	      json: async () => ({ auth_url: "https://accounts.google.com/o/oauth2/auth?..." }),
+	    })
+      .mockResolvedValueOnce({
+	      ok: true,
+	      json: async () => ({ access_token: "valid-tok", refresh_token: "valid-ref", expires_in: 3600 }),
+	    });
     // Mock window.open to return null (popup blocked) — causes connect to reject quickly
     globalThis.open = vi.fn().mockReturnValue(null);
     await Gmail.connect().catch(() => {});
@@ -211,14 +230,23 @@ describe("Gmail OAuth", () => {
           type: "gmail-oauth",
           status: "success",
           state: rawState,
-          access_token: "valid-tok",
-          refresh_token: "valid-ref",
-          expires_in: 3600,
+          auth_result_id: "auth-result-1",
         },
       }),
     );
 
     await connectPromise;
+  });
+
+  it("connect rejects when the vault is not configured", async () => {
+    Vault.isConfigured.mockReturnValue(false);
+    await expect(Gmail.connect()).rejects.toThrow("Set up a PIN before connecting Gmail.");
+  });
+
+  it("connect rejects when the vault is locked", async () => {
+    Vault.isConfigured.mockReturnValue(true);
+    Vault.isUnlocked.mockReturnValue(false);
+    await expect(Gmail.connect()).rejects.toThrow("Unlock your PIN before connecting Gmail.");
   });
 });
 
@@ -232,10 +260,16 @@ describe("OAuth onMessage origin guard", () => {
   });
 
   it("ignores postMessage from an invalid origin and does not update settings", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
-    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "valid-tok", refresh_token: "valid-ref", expires_in: 3600 }),
+      });
     const mockPopup = { closed: false };
     globalThis.open = vi.fn().mockReturnValue(mockPopup);
 
@@ -252,8 +286,7 @@ describe("OAuth onMessage origin guard", () => {
         data: {
           type: "gmail-oauth",
           status: "success",
-          access_token: "hacked",
-          refresh_token: "hacked",
+          auth_result_id: "ignored-auth-result",
         },
       }),
     );
@@ -271,9 +304,7 @@ describe("OAuth onMessage origin guard", () => {
           type: "gmail-oauth",
           status: "success",
           state: getPendingOAuthState().rawState,
-          access_token: "valid-tok",
-          refresh_token: "valid-ref",
-          expires_in: 3600,
+          auth_result_id: "auth-result-1",
         },
       }),
     );
@@ -283,10 +314,16 @@ describe("OAuth onMessage origin guard", () => {
   });
 
   it("processes postMessage from the correct origin derived from GMAIL_PROXY_URL", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
-    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "real-tok", refresh_token: "real-ref", expires_in: 3600 }),
+      });
     const mockPopup = { closed: false };
     globalThis.open = vi.fn().mockReturnValue(mockPopup);
 
@@ -303,9 +340,7 @@ describe("OAuth onMessage origin guard", () => {
           type: "gmail-oauth",
           status: "success",
           state: getPendingOAuthState().rawState,
-          access_token: "real-tok",
-          refresh_token: "real-ref",
-          expires_in: 3600,
+          auth_result_id: "auth-result-1",
         },
       }),
     );
@@ -334,9 +369,7 @@ describe("OAuth onMessage origin guard", () => {
           type: "gmail-oauth",
           status: "success",
           state: "attacker-supplied-state",
-          access_token: "bad-tok",
-          refresh_token: "bad-ref",
-          expires_in: 3600,
+          auth_result_id: "auth-result-1",
         },
       }),
     );
@@ -347,10 +380,16 @@ describe("OAuth onMessage origin guard", () => {
   });
 
   it("postMessage resolves auth even when popup would throw on closed access (COOP)", async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
-    });
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "coop-tok", refresh_token: "coop-ref", expires_in: 3600 }),
+      });
 
     // Simulate a popup whose .closed getter throws a SecurityError (COOP)
     const coopPopup = {
@@ -376,9 +415,7 @@ describe("OAuth onMessage origin guard", () => {
           type: "gmail-oauth",
           status: "success",
           state: getPendingOAuthState().rawState,
-          access_token: "coop-tok",
-          refresh_token: "coop-ref",
-          expires_in: 3600,
+          auth_result_id: "auth-result-1",
         },
       }),
     );
@@ -3087,10 +3124,16 @@ describe("_fetchAndStoreSub", () => {
 // ===========================================================================
 describe("connect() — post-OAuth sub fetch", () => {
 	it("calls _fetchAndStoreSub after a successful OAuth flow", async () => {
-		globalThis.fetch = vi.fn().mockResolvedValue({
-			ok: true,
-			json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
-		});
+		globalThis.fetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				json: async () => ({ access_token: "new-tok", refresh_token: "new-ref", expires_in: 3600 }),
+			});
 		const mockPopup = { closed: false };
 		globalThis.open = vi.fn().mockReturnValue(mockPopup);
 
@@ -3107,9 +3150,7 @@ describe("connect() — post-OAuth sub fetch", () => {
 					type: "gmail-oauth",
 					status: "success",
 					state: getPendingOAuthState().rawState,
-					access_token: "new-tok",
-					refresh_token: "new-ref",
-					expires_in: 3600,
+					auth_result_id: "auth-result-1",
 				},
 			}),
 		);
@@ -3185,7 +3226,7 @@ describe("connect() \u2014 iOS PWA redirect flow", () => {
 		Object.defineProperty(navigator, "standalone", { value: true, configurable: true });
 
 		let resolveFetch;
-		global.fetch = vi.fn().mockImplementation(
+		globalThis.fetch = vi.fn().mockImplementation(
 			() =>
 				new Promise((resolve) => {
 					resolveFetch = resolve;
@@ -3208,6 +3249,7 @@ describe("connect() \u2014 iOS PWA redirect flow", () => {
 		const windowOpenSpy = vi.spyOn(window, "open");
 
 		Gmail.connect();
+		await new Promise((r) => setTimeout(r, 0));
 		Object.defineProperty(navigator, "standalone", { value: false, configurable: true });
 		resolveFetch({
 			ok: true,

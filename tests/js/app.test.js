@@ -78,6 +78,8 @@ const mockAPI = {
   getSpendingReport: vi.fn().mockResolvedValue({ total_transactions: 0, categories: [] }),
   isBiometricAvailable: vi.fn().mockResolvedValue(false),
   isBiometricEnabled: vi.fn().mockReturnValue(false),
+  isVaultUnlocked: vi.fn().mockReturnValue(false),
+  unlockVault: vi.fn().mockResolvedValue(true),
   setupBiometric: vi.fn().mockResolvedValue(undefined),
   unlockWithBiometric: vi.fn().mockResolvedValue(true),
   disableBiometric: vi.fn(),
@@ -2835,5 +2837,85 @@ describe("Vault — PIN minimum 4 characters", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(mockAPI.setupVault).toHaveBeenCalledWith("abcd");
+  });
+});
+
+// ===========================================================================
+// Gmail connect — vault gating and auto-continue
+// ===========================================================================
+describe("Gmail connect vault gating", () => {
+  async function renderSettings() {
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    document.getElementById("vault-setup-modal")?.remove();
+    document.getElementById("vault-unlock-screen")?.remove();
+    mockAPI.getGmailConnectUrl.mockClear();
+    mockAPI.setupVault.mockReset();
+    mockAPI.unlockVault.mockReset();
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+    mockAPI.isVaultUnlocked.mockReturnValue(false);
+  });
+
+  it("clicking connect without a vault opens setup and does not start Gmail auth", async () => {
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+    mockAPI.isVaultUnlocked.mockReturnValue(false);
+    const screen = await renderSettings();
+
+    screen.querySelector('[data-action="gdrive-connect"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(document.getElementById("vault-setup-modal")).not.toBeNull();
+    expect(mockAPI.getGmailConnectUrl).not.toHaveBeenCalled();
+  });
+
+  it("successful PIN setup from connect flow automatically starts Gmail auth", async () => {
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+    mockAPI.isVaultUnlocked.mockReturnValue(false);
+    mockAPI.setupVault.mockImplementation(async () => {
+      mockAPI.isVaultConfigured.mockReturnValue(true);
+      mockAPI.isVaultUnlocked.mockReturnValue(true);
+    });
+    mockAPI.getGmailConnectUrl.mockResolvedValue({ connected: true });
+
+    const screen = await renderSettings();
+    screen.querySelector('[data-action="gdrive-connect"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const modal = document.getElementById("vault-setup-modal");
+    modal.querySelector("#vault-setup-passphrase").value = "1234";
+    modal.querySelector("#vault-setup-confirm").value = "1234";
+    modal.querySelector('[data-action="do-setup-vault"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockAPI.setupVault).toHaveBeenCalledWith("1234");
+    expect(mockAPI.getGmailConnectUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("successful unlock from connect flow automatically starts Gmail auth", async () => {
+    mockAPI.isVaultConfigured.mockReturnValue(true);
+    mockAPI.isVaultUnlocked.mockReturnValue(false);
+    mockAPI.unlockVault.mockImplementation(async () => {
+      mockAPI.isVaultUnlocked.mockReturnValue(true);
+      return true;
+    });
+    mockAPI.getGmailConnectUrl.mockResolvedValue({ connected: true });
+
+    const screen = await renderSettings();
+    screen.querySelector('[data-action="gdrive-connect"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const overlay = document.getElementById("vault-unlock-screen");
+    expect(overlay).not.toBeNull();
+    overlay.querySelector("#vault-unlock-passphrase").value = "1234";
+    overlay.querySelector('[data-action="unlock-vault"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockAPI.unlockVault).toHaveBeenCalledWith("1234");
+    expect(mockAPI.getGmailConnectUrl).toHaveBeenCalledTimes(1);
   });
 });

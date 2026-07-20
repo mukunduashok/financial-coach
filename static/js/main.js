@@ -3,7 +3,7 @@ import "./ai.js";
 import { API } from "./api.js";
 import "./app.js";
 import {
-  GMAIL_SETTINGS_KEY,
+  GMAIL_OAUTH_CALLBACK_PARAM,
   SESSION_EXPIRY_MS,
   SESSION_EXPIRY_WARN_KEY,
   SESSION_LAST_ACTIVITY_KEY,
@@ -12,9 +12,9 @@ import {
 import { Gmail } from "./gmail.js";
 import { Vault } from "./vault.js";
 
-function _handleOAuthCallback() {
+async function _handleOAuthCallback() {
   const search = new URLSearchParams(window.location.search);
-  if (!search.has("gmail-oauth")) return;
+  if (!search.has(GMAIL_OAUTH_CALLBACK_PARAM)) return;
 
   const fragment = window.location.hash.slice(1);
   // Clean the URL regardless of outcome
@@ -32,15 +32,23 @@ function _handleOAuthCallback() {
     }
 
     if (payload.status === "success") {
-      if (!payload.access_token || !payload.refresh_token) return;
-      const tokenExpiry = Date.now() + (payload.expires_in || 3600) * 1000;
-      const settings = {
-        accessToken: payload.access_token,
-        refreshToken: payload.refresh_token,
-        tokenExpiry,
-      };
-      localStorage.setItem(GMAIL_SETTINGS_KEY, JSON.stringify(settings));
-      sessionStorage.setItem("gmail-oauth-redirect-success", "1");
+      if (!payload.auth_result_id) return;
+      Gmail.storePendingOAuthResult({
+        authResultId: payload.auth_result_id,
+        state: payload.state || "",
+      });
+      if (!Vault.isConfigured()) {
+        Gmail.clearPendingOAuthResult();
+        sessionStorage.setItem(
+          "gmail-oauth-redirect-error",
+          "Set up a PIN before connecting Gmail.",
+        );
+        return;
+      }
+      if (Vault.isUnlocked()) {
+        await Gmail.finalizePendingOAuthResult();
+        sessionStorage.setItem("gmail-oauth-redirect-success", "1");
+      }
     } else {
       sessionStorage.setItem("gmail-oauth-redirect-error", payload.error || "OAuth failed");
     }
@@ -50,7 +58,7 @@ function _handleOAuthCallback() {
 }
 
 async function boot() {
-  _handleOAuthCallback();
+  await _handleOAuthCallback();
   try {
     // Session expiry guard — runs before DB loads
     const trusted = localStorage.getItem(TRUSTED_DEVICE_KEY) === "true";

@@ -400,6 +400,96 @@ test.describe("TestGoogleDriveSyncSection", () => {
     expect(text.toLowerCase()).toContain("connect");
   });
 
+  test("clicking connect without a PIN and then skipping does not continue into Gmail auth", async ({
+    pwaPage,
+  }) => {
+    const connectBtn = pwaPage.locator("button[data-action='gdrive-connect']");
+    await expect(connectBtn).toHaveCount(1);
+
+    let popupOpened = false;
+    pwaPage.once("popup", () => {
+      popupOpened = true;
+    });
+
+    await connectBtn.click();
+
+    await expect(pwaPage.locator("#vault-setup-modal")).toBeVisible({ timeout: 5_000 });
+    await expect(pwaPage.locator(".toast.error")).toContainText(
+      "Set up a PIN before connecting Gmail.",
+    );
+
+    await pwaPage.click('[data-action="close-vault-setup-modal"]');
+    await expect(pwaPage.locator("#vault-setup-modal")).toHaveCount(0);
+    await pwaPage.waitForTimeout(300);
+    expect(popupOpened).toBe(false);
+  });
+
+  test("setting up a PIN from the connect flow automatically continues into Gmail OAuth", async ({
+    pwaPage,
+  }) => {
+    await pwaPage.route(/auth\/url\?state=/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          auth_url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client",
+        }),
+      });
+    });
+
+    const connectBtn = pwaPage.locator("button[data-action='gdrive-connect']");
+    await expect(connectBtn).toHaveCount(1);
+
+    const popupPromise = pwaPage.waitForEvent("popup");
+
+    await connectBtn.click();
+    await expect(pwaPage.locator("#vault-setup-modal")).toBeVisible({ timeout: 5_000 });
+    await pwaPage.fill("#vault-setup-passphrase", "1234");
+    await pwaPage.fill("#vault-setup-confirm", "1234");
+    await pwaPage.click('[data-action="do-setup-vault"]');
+
+    const popup = await popupPromise;
+    expect(popup.url()).toContain("accounts.google.com");
+    await popup.close();
+  });
+
+  test("unlocking a configured vault from the connect flow automatically continues into Gmail OAuth", async ({
+    pwaPage,
+  }) => {
+    await pwaPage.route(/auth\/url\?state=/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          auth_url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=test-client",
+        }),
+      });
+    });
+
+    await pwaPage.evaluate(async () => {
+      await window.API.setupVault("1234");
+      window.API.lockVault();
+    });
+    await goSettings(pwaPage);
+
+    const connectBtn = pwaPage.locator("button[data-action='gdrive-connect']");
+    await expect(connectBtn).toHaveCount(1);
+
+    const popupPromise = pwaPage.waitForEvent("popup");
+
+    await connectBtn.click();
+    await expect(pwaPage.locator("#vault-unlock-screen")).toBeVisible({ timeout: 5_000 });
+    await expect(pwaPage.locator(".toast.error")).toContainText(
+      "Unlock your PIN before connecting Gmail.",
+    );
+    await pwaPage.fill("#vault-unlock-passphrase", "1234");
+    await pwaPage.click('[data-action="unlock-vault"]');
+
+    const popup = await popupPromise;
+    expect(popup.url()).toContain("accounts.google.com");
+    await popup.close();
+  });
+
   test("gdrive sync button absent when not connected", async ({ pwaPage }) => {
     const syncBtn = pwaPage.locator("button[data-action='gdrive-sync']");
     expect(await syncBtn.count()).toBe(0);
@@ -788,19 +878,40 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 			}
 		}, rawState);
 		await page.goto(`/?gmail-oauth=1#${fragment}`);
-		await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
-		await page.waitForSelector("#screen");
+		await page.waitForSelector("#app", { timeout: 30_000 });
+		await page.waitForFunction(
+			() => !!document.querySelector(".bottom-nav") || !!document.querySelector("#vault-unlock-screen"),
+			{ timeout: 30_000 },
+		);
 	}
 
-	test("success payload — URL cleaned, tokens saved, success toast shown", async ({ page }) => {
+	test("success payload — URL cleaned, vault unlock completes auth, success toast shown", async ({ page }) => {
+		await page.goto("/");
+		await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
+		await page.evaluate(async () => {
+			localStorage.setItem("fincoach-onboarded", "true");
+			await window.API.setupVault("1234");
+			window.API.lockVault();
+		});
+		await page.route(/auth\/consume$/, async (route) => {
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				headers: { "Cache-Control": "no-store" },
+				body: JSON.stringify({
+					access_token: "test-access-token-123",
+					refresh_token: "test-refresh-token-456",
+					expires_in: 3600,
+				}),
+			});
+		});
+
 		const rawState = buildOAuthState();
 		const fragment = encodePayload({
 			type: "gmail-oauth",
 			status: "success",
 			state: rawState,
-			access_token: "test-access-token-123",
-			refresh_token: "test-refresh-token-456",
-			expires_in: 3600,
+			auth_result_id: "auth-result-1",
 		});
 
 		await gotoWithOAuth(page, fragment, rawState);
@@ -813,14 +924,19 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 		const hash = await page.evaluate(() => window.location.hash);
 		expect(hash).toBe("#/settings");
 
-		// Tokens persisted in localStorage with correct keys
-		const stored = await page.evaluate(() => {
-			const raw = localStorage.getItem("fincoach-gmail-settings");
-			return raw ? JSON.parse(raw) : null;
-		});
-		expect(stored).not.toBeNull();
-		expect(stored.accessToken).toBe("test-access-token-123");
-		expect(stored.refreshToken).toBe("test-refresh-token-456");
+		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 10_000 });
+		await page.fill("#vault-unlock-passphrase", "1234");
+		await page.click('[data-action="unlock-vault"]');
+		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 10_000 });
+
+		// Tokens persisted only in the encrypted vault, never plaintext localStorage
+		const stored = await page.evaluate(() => ({
+			plaintext: localStorage.getItem("fincoach-gmail-settings"),
+			encrypted: localStorage.getItem("fincoach-vault-gmail"),
+		}));
+		expect(stored.plaintext).toBeNull();
+		expect(typeof stored.encrypted).toBe("string");
+		expect(stored.encrypted.length).toBeGreaterThan(0);
 
 		// Success toast is visible on the settings screen
 		await page.waitForSelector(".toast.success", { timeout: 5000 });

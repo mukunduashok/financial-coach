@@ -27,6 +27,7 @@ export const GDRIVE_SYNC_LOCK_KEY = "fincoach-gdrive-sync-lock";
 export const GMAIL_SETTINGS_KEY = "fincoach-gmail-settings";
 export const GMAIL_CUSTOM_SENDERS_KEY = "fincoach-gmail-custom-senders";
 export const GMAIL_OAUTH_PENDING_STATE_KEY = "fincoach-gmail-oauth-pending-state";
+export const GMAIL_OAUTH_PENDING_RESULT_KEY = "fincoach-gmail-oauth-pending-result";
 export const GMAIL_OAUTH_STATE_TTL_MS = 300_000; // 5 minutes
 export const AI_SETTINGS_KEY = "fincoach-ai-settings";
 

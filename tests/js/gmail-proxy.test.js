@@ -1,90 +1,158 @@
 // @vitest-environment node
 /**
  * Unit tests for cloudflare-worker/gmail-proxy.js
- *
- * Tests the Worker's exported fetch handler, which exercises:
- *   - _originAllowed() via CORS headers on responses
- *   - callbackHTML() via the /auth/callback response body
- *   - handleAuthUrl() via the /auth/url endpoint
- *   - handleCallback() via the /auth/callback endpoint
- *
- * Note: _originAllowed, callbackHTML, handleAuthUrl, handleCallback are NOT
- * individually exported — they are tested indirectly through the fetch handler.
- * Functions that require full Cloudflare Worker runtime (e.g., KV, Durable
- * Objects) are not tested here.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import workerModule from "../../cloudflare-worker/gmail-proxy.js";
 
-// ---------------------------------------------------------------------------
-// Shared test env
-// ---------------------------------------------------------------------------
-const mockEnv = {
-  GOOGLE_CLIENT_ID: "test-client-id",
-  GOOGLE_CLIENT_SECRET: "test-client-secret",
-  REDIRECT_URI: "https://proxy.example.com/auth/callback",
-  ALLOWED_ORIGIN: "http://localhost:8080,https://app.pages.dev",
-};
+function createAuthResultsBinding() {
+  const records = new Map();
+  let seq = 0;
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+  function getKey(idLike) {
+    if (!idLike) throw new Error("missing id");
+    return typeof idLike === "string" ? idLike : idLike.toString();
+  }
 
-/** Build a GET Request with optional query params and Origin header. */
-function makeRequest(path, { origin = "", searchParams = {} } = {}) {
+  return {
+    newUniqueId() {
+      seq += 1;
+      const id = `auth-result-${seq}`;
+      return { toString: () => id };
+    },
+    idFromString(id) {
+      if (!id || typeof id !== "string") throw new Error("bad id");
+      return { toString: () => id };
+    },
+    get(idLike) {
+      const key = getKey(idLike);
+      return {
+        async fetch(requestUrl, init = {}) {
+          const url = new URL(requestUrl);
+          const method = init.method || "GET";
+          const body = init.body ? JSON.parse(init.body) : null;
+
+          if (url.pathname === "/store" && method === "POST") {
+            records.set(key, body);
+            return new Response(null, { status: 204 });
+          }
+
+          if (url.pathname === "/consume" && method === "POST") {
+            const record = records.get(key);
+            if (!record) {
+              return new Response(JSON.stringify({ error: "OAuth result not found" }), {
+                status: 404,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+            if (record.expires_at && Date.now() > record.expires_at) {
+              records.delete(key);
+              return new Response(JSON.stringify({ error: "OAuth result expired" }), {
+                status: 410,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+            if (body?.state !== record.state) {
+              return new Response(JSON.stringify({ error: "Invalid OAuth state" }), {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
+
+            records.delete(key);
+            return new Response(
+              JSON.stringify({
+                access_token: record.access_token,
+                refresh_token: record.refresh_token,
+                expires_in: record.expires_in,
+              }),
+              {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+              },
+            );
+          }
+
+          return new Response(JSON.stringify({ error: "Not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        },
+      };
+    },
+  };
+}
+
+function createMockEnv(overrides = {}) {
+  return {
+    GOOGLE_CLIENT_ID: "test-client-id",
+    GOOGLE_CLIENT_SECRET: "test-client-secret",
+    REDIRECT_URI: "https://proxy.example.com/auth/callback",
+    ALLOWED_ORIGIN: "http://localhost:8080,https://app.pages.dev",
+    AUTH_RESULTS: createAuthResultsBinding(),
+    ...overrides,
+  };
+}
+
+function makeRequest(path, { origin = "", searchParams = {}, method = "GET", body } = {}) {
   const url = new URL(`https://proxy.example.com${path}`);
   for (const [k, v] of Object.entries(searchParams)) {
     url.searchParams.set(k, v);
   }
   const headers = {};
-  if (origin) headers["Origin"] = origin;
-  return new Request(url.toString(), { method: "GET", headers });
+  if (origin) headers.Origin = origin;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  return new Request(url.toString(), {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
-// ===========================================================================
-// 1. _originAllowed — tested via CORS headers on JSON responses
-// ===========================================================================
 describe("_originAllowed (via CORS response headers)", () => {
   it("exact match: allowed origin receives Access-Control-Allow-Origin", async () => {
-    const req = makeRequest("/auth/url", { origin: "https://app.pages.dev" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "https://app.pages.dev" }),
+      createMockEnv(),
+    );
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("https://app.pages.dev");
   });
 
   it("wildcard: subdomain matches *.pages.dev pattern", async () => {
-    const envWild = { ...mockEnv, ALLOWED_ORIGIN: "https://*.pages.dev" };
-    const req = makeRequest("/auth/url", { origin: "https://abc.pages.dev" });
-    const resp = await workerModule.fetch(req, envWild);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "https://abc.pages.dev" }),
+      createMockEnv({ ALLOWED_ORIGIN: "https://*.pages.dev" }),
+    );
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("https://abc.pages.dev");
   });
 
   it("no match: disallowed origin does NOT receive CORS header", async () => {
-    const req = makeRequest("/auth/url", { origin: "https://evil.com" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "https://evil.com" }),
+      createMockEnv(),
+    );
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 
   it("multiple allowed (comma-separated): second origin is allowed", async () => {
-    // mockEnv.ALLOWED_ORIGIN = "http://localhost:8080,https://app.pages.dev"
-    const req = makeRequest("/auth/url", { origin: "http://localhost:8080" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "http://localhost:8080" }),
+      createMockEnv(),
+    );
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:8080");
   });
 
   it("empty allowlist: no origin is allowed", async () => {
-    const envEmpty = { ...mockEnv, ALLOWED_ORIGIN: "" };
-    const req = makeRequest("/auth/url", { origin: "https://app.pages.dev" });
-    const resp = await workerModule.fetch(req, envEmpty);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "https://app.pages.dev" }),
+      createMockEnv({ ALLOWED_ORIGIN: "" }),
+    );
     expect(resp.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 });
 
-// ===========================================================================
-// 2. callbackHTML — tested via /auth/callback response body
-// ===========================================================================
 describe("callbackHTML (via /auth/callback endpoint)", () => {
   beforeEach(() => {
-    // Mock token exchange fetch — returns a successful token response
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -102,71 +170,68 @@ describe("callbackHTML (via /auth/callback endpoint)", () => {
 
   it("targetOrigin in postMessage is the decoded state origin, not '*'", async () => {
     const state = btoa(JSON.stringify({ nonce: "n1", origin: "http://localhost:8080" }));
-    const req = makeRequest("/auth/callback", {
-      searchParams: { code: "auth-code", state },
-    });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code", state } }),
+      createMockEnv(),
+    );
     const html = await resp.text();
 
     expect(html).toContain('"http://localhost:8080"');
     expect(html).not.toContain('"*"');
   });
 
+  it("success callback does not embed access or refresh tokens in HTML", async () => {
+    const state = btoa(JSON.stringify({ nonce: "n2", origin: "http://localhost:8080" }));
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code", state } }),
+      createMockEnv(),
+    );
+    const html = await resp.text();
+
+    expect(resp.status).toBe(200);
+    expect(html).toContain('"type":"gmail-oauth"');
+    expect(html).toContain('"status":"success"');
+    expect(html).toContain(`"state":"${state}"`);
+    expect(html).toContain('"auth_result_id":"auth-result-1"');
+    expect(html).not.toContain('"access_token":"tok"');
+    expect(html).not.toContain('"refresh_token":"ref"');
+    expect(resp.headers.get("Cache-Control")).toContain("no-store");
+  });
+
+  it("error status renders 'Authentication failed' message with 400", async () => {
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { error: "access_denied" } }),
+      createMockEnv(),
+    );
+    const html = await resp.text();
+
+    expect(html).toContain("Authentication failed");
+    expect(resp.status).toBe(400);
+    expect(resp.headers.get("Cache-Control")).toContain("no-store");
+  });
+
   it("targetOrigin defaults to 'null' when state is absent (safe fallback)", async () => {
-    const req = makeRequest("/auth/callback", { searchParams: { code: "auth-code" } });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code" } }),
+      createMockEnv(),
+    );
     const html = await resp.text();
 
     expect(html).toContain('"null"');
     expect(html).not.toContain('"*"');
   });
-
-  it("targetOrigin is 'null' when state origin is NOT in the allowlist", async () => {
-    const state = btoa(JSON.stringify({ nonce: "n2", origin: "https://evil.com" }));
-    const req = makeRequest("/auth/callback", {
-      searchParams: { code: "auth-code", state },
-    });
-    const resp = await workerModule.fetch(req, mockEnv);
-    const html = await resp.text();
-
-    // Must NOT use evil.com as postMessage target
-    expect(html).not.toContain('"https://evil.com"');
-    expect(html).toContain('"null"');
-  });
-
-  it("success status renders 'Authentication successful' message", async () => {
-    const state = btoa(JSON.stringify({ nonce: "n3", origin: "http://localhost:8080" }));
-    const req = makeRequest("/auth/callback", {
-      searchParams: { code: "auth-code", state },
-    });
-    const resp = await workerModule.fetch(req, mockEnv);
-    const html = await resp.text();
-
-    expect(html).toContain("Authentication successful");
-    expect(resp.status).toBe(200);
-  });
-
-  it("error status renders 'Authentication failed' message with 400", async () => {
-    const req = makeRequest("/auth/callback", { searchParams: { error: "access_denied" } });
-    const resp = await workerModule.fetch(req, mockEnv);
-    const html = await resp.text();
-
-    expect(html).toContain("Authentication failed");
-    expect(resp.status).toBe(400);
-  });
 });
 
-// ===========================================================================
-// 3. handleAuthUrl — tested via /auth/url endpoint
-// ===========================================================================
 describe("handleAuthUrl (via /auth/url endpoint)", () => {
   it("state query param is forwarded into the Google auth_url", async () => {
     const stateValue = btoa(JSON.stringify({ nonce: "abc", origin: "http://localhost:8080" }));
-    const req = makeRequest("/auth/url", {
-      origin: "http://localhost:8080",
-      searchParams: { state: stateValue },
-    });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", {
+        origin: "http://localhost:8080",
+        searchParams: { state: stateValue },
+      }),
+      createMockEnv(),
+    );
     const data = await resp.json();
 
     const authUrl = new URL(data.auth_url);
@@ -174,8 +239,10 @@ describe("handleAuthUrl (via /auth/url endpoint)", () => {
   });
 
   it("auth_url has no state parameter when no state is provided", async () => {
-    const req = makeRequest("/auth/url", { origin: "http://localhost:8080" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "http://localhost:8080" }),
+      createMockEnv(),
+    );
     const data = await resp.json();
 
     const authUrl = new URL(data.auth_url);
@@ -183,8 +250,10 @@ describe("handleAuthUrl (via /auth/url endpoint)", () => {
   });
 
   it("returns 200 with auth_url field", async () => {
-    const req = makeRequest("/auth/url", { origin: "http://localhost:8080" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "http://localhost:8080" }),
+      createMockEnv(),
+    );
 
     expect(resp.status).toBe(200);
     const data = await resp.json();
@@ -193,119 +262,174 @@ describe("handleAuthUrl (via /auth/url endpoint)", () => {
   });
 
   it("auth_url scope includes gmail.readonly, drive.appdata, openid, and email", async () => {
-    const req = makeRequest("/auth/url", { origin: "http://localhost:8080" });
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/url", { origin: "http://localhost:8080" }),
+      createMockEnv(),
+    );
     const data = await resp.json();
 
     const authUrl = new URL(data.auth_url);
     const scope = authUrl.searchParams.get("scope");
     expect(scope).toContain("https://www.googleapis.com/auth/gmail.readonly");
     expect(scope).toContain("https://www.googleapis.com/auth/drive.appdata");
-    // openid + email are required so /oauth2/v3/userinfo returns the user's sub
     expect(scope.split(" ")).toContain("openid");
     expect(scope.split(" ")).toContain("email");
   });
 
   it("404 for unknown endpoint", async () => {
-    const req = makeRequest("/unknown");
-    const resp = await workerModule.fetch(req, mockEnv);
+    const resp = await workerModule.fetch(makeRequest("/unknown"), createMockEnv());
     expect(resp.status).toBe(404);
   });
 });
 
-// ===========================================================================
-// 4. callbackHTML — redirect fallback (iOS PWA)
-// ===========================================================================
-describe("callbackHTML \u2014 redirect fallback (iOS PWA)", () => {
-	beforeEach(() => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn().mockResolvedValue(
-				new Response(
-					JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_in: 3600 }),
-					{ status: 200, headers: { "Content-Type": "application/json" } },
-				),
-			),
-		);
-	});
+describe("callbackHTML — redirect fallback (iOS PWA)", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_in: 3600 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+  });
 
-	afterEach(() => {
-		vi.unstubAllGlobals();
-	});
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-	it("generated HTML contains the window.location.replace redirect branch", async () => {
-		const state = btoa(JSON.stringify({ origin: "http://localhost:8080" }));
-		const req = makeRequest("/auth/callback", {
-			searchParams: { code: "auth-code", state },
-		});
-		const resp = await workerModule.fetch(req, mockEnv);
-		const html = await resp.text();
+  it("generated HTML contains the window.location.replace redirect branch", async () => {
+    const state = btoa(JSON.stringify({ origin: "http://localhost:8080" }));
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code", state } }),
+      createMockEnv(),
+    );
+    const html = await resp.text();
 
-		expect(html).toContain("window.location.replace");
-		expect(html).toContain("/?gmail-oauth=1#");
-	});
+    expect(html).toContain("window.location.replace");
+    expect(html).toContain("/?gmail-oauth=1#");
+  });
 
-	it("redirect URL uses targetOrigin derived from state", async () => {
-		const state = btoa(JSON.stringify({ origin: "http://localhost:8080" }));
-		const req = makeRequest("/auth/callback", {
-			searchParams: { code: "auth-code", state },
-		});
-		const resp = await workerModule.fetch(req, mockEnv);
-		const html = await resp.text();
+  it("redirect payload uses auth_result_id instead of tokens", async () => {
+    const state = btoa(JSON.stringify({ origin: "http://localhost:8080" }));
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code", state } }),
+      createMockEnv(),
+    );
+    const html = await resp.text();
 
-		expect(html).toContain('"http://localhost:8080"');
-		expect(html).toContain('+ "/?gmail-oauth=1#"');
-	});
+    expect(html).toContain('"auth_result_id":"auth-result-1"');
+    expect(html).not.toContain('"access_token":"tok"');
+    expect(html).not.toContain('"refresh_token":"ref"');
+  });
 
-	it("redirect branch is guarded by t !== 'null' so it skips when targetOrigin is null", async () => {
-		// No state \u2192 targetOrigin defaults to "null" \u2192 redirect branch should not fire
-		const req = makeRequest("/auth/callback", { searchParams: { code: "auth-code" } });
-		const resp = await workerModule.fetch(req, mockEnv);
-		const html = await resp.text();
+  it("error payload also echoes state for browser-side csrf validation", async () => {
+    const state = btoa(JSON.stringify({ origin: "http://localhost:8080", nonce: "nonce-err" }));
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { error: "access_denied", state } }),
+      createMockEnv(),
+    );
+    const html = await resp.text();
 
-		expect(html).toContain("window.location.replace");
-		expect(html).toContain('"null"');
-		expect(html).toContain('t !== "null"');
-	});
+    expect(resp.status).toBe(400);
+    expect(html).toContain('"status":"error"');
+    expect(html).toContain(`"state":"${state}"`);
+    expect(html).toContain('"error":"access_denied"');
+  });
+});
 
-	it("payload in generated script contains expected gmail-oauth fields and echoes state", async () => {
-		const state = btoa(
-			JSON.stringify({
-				origin: "http://localhost:8080",
-				nonce: "nonce-123",
-				issued_at: 1_700_000_000_000,
-			}),
-		);
-		const req = makeRequest("/auth/callback", {
-			searchParams: { code: "auth-code", state },
-		});
-		const resp = await workerModule.fetch(req, mockEnv);
-		const html = await resp.text();
+describe("/auth/consume", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ access_token: "tok", refresh_token: "ref", expires_in: 3600 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+  });
 
-		expect(html).toContain('"type":"gmail-oauth"');
-		expect(html).toContain('"status":"success"');
-		expect(html).toContain(`"state":"${state}"`);
-		expect(html).toContain('"access_token":"tok"');
-		expect(html).toContain('"refresh_token":"ref"');
-	});
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-	it("error payload also echoes state for browser-side csrf validation", async () => {
-		const state = btoa(
-			JSON.stringify({
-				origin: "http://localhost:8080",
-				nonce: "nonce-err",
-				issued_at: 1_700_000_000_000,
-			}),
-		);
-		const req = makeRequest("/auth/callback", {
-			searchParams: { error: "access_denied", state },
-		});
-		const resp = await workerModule.fetch(req, mockEnv);
-		const html = await resp.text();
+  async function createAuthResult(env, state = "valid-state") {
+    const callbackResp = await workerModule.fetch(
+      makeRequest("/auth/callback", { searchParams: { code: "auth-code", state } }),
+      env,
+    );
+    const html = await callbackResp.text();
+    return html.match(/"auth_result_id":"([^"]+)"/)?.[1] || null;
+  }
 
-		expect(resp.status).toBe(400);
-		expect(html).toContain('"status":"error"');
-		expect(html).toContain(`"state":"${state}"`);
-		expect(html).toContain('"error":"access_denied"');
-	});
+  it("returns tokens once and prevents replay", async () => {
+    const env = createMockEnv();
+    const state = "valid-state";
+    const authResultId = await createAuthResult(env, state);
+
+    const firstResp = await workerModule.fetch(
+      makeRequest("/auth/consume", {
+        method: "POST",
+        origin: "http://localhost:8080",
+        body: { auth_result_id: authResultId, state },
+      }),
+      env,
+    );
+    const firstData = await firstResp.json();
+    expect(firstResp.status).toBe(200);
+    expect(firstData.access_token).toBe("tok");
+    expect(firstData.refresh_token).toBe("ref");
+    expect(firstResp.headers.get("Cache-Control")).toContain("no-store");
+
+    const secondResp = await workerModule.fetch(
+      makeRequest("/auth/consume", {
+        method: "POST",
+        origin: "http://localhost:8080",
+        body: { auth_result_id: authResultId, state },
+      }),
+      env,
+    );
+    const secondData = await secondResp.json();
+    expect(secondResp.status).toBe(404);
+    expect(secondData.error).toContain("not found");
+  });
+
+  it("rejects a mismatched OAuth state", async () => {
+    const env = createMockEnv();
+    const authResultId = await createAuthResult(env, "expected-state");
+
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/consume", {
+        method: "POST",
+        origin: "http://localhost:8080",
+        body: { auth_result_id: authResultId, state: "wrong-state" },
+      }),
+      env,
+    );
+    const data = await resp.json();
+
+    expect(resp.status).toBe(403);
+    expect(data.error).toContain("Invalid OAuth state");
+  });
+
+  it("rejects disallowed origins", async () => {
+    const env = createMockEnv();
+    const authResultId = await createAuthResult(env, "expected-state");
+
+    const resp = await workerModule.fetch(
+      makeRequest("/auth/consume", {
+        method: "POST",
+        origin: "https://evil.com",
+        body: { auth_result_id: authResultId, state: "expected-state" },
+      }),
+      env,
+    );
+    const data = await resp.json();
+
+    expect(resp.status).toBe(403);
+    expect(data.error).toContain("Origin not allowed");
+  });
 });
