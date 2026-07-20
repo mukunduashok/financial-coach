@@ -60,7 +60,8 @@ export const GMAIL_OAUTH_CALLBACK_PARAM = "gmail-oauth";
 
 // Vault biometric authentication keys
 export const VAULT_BIOMETRIC_CRED_KEY = "fincoach-vault-biometric-cred";
-export const VAULT_BIOMETRIC_WRAP_KEY = "fincoach-vault-biometric-wrap";
+export const VAULT_BIOMETRIC_LEGACY_WRAP_KEY = "fincoach-vault-biometric-wrap";
+export const VAULT_BIOMETRIC_PRF_SALT_KEY = "fincoach-vault-biometric-prf-salt";
 export const VAULT_BIOMETRIC_WRAPPED_KEY = "fincoach-vault-biometric-wrapped";
 
 export const PRIVACY_MODE_KEY = "fincoach-privacy-mode";

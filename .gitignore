@@ -14,3 +14,6 @@ static/js/env.js
 
 # Test artifacts
 test-results/
+
+# Repo-local Hermes scripted workflow outputs
+.hermes/runs/

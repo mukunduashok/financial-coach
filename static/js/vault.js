@@ -9,7 +9,8 @@ import {
   GMAIL_SETTINGS_KEY,
   VAULT_AI_KEY,
   VAULT_BIOMETRIC_CRED_KEY,
-  VAULT_BIOMETRIC_WRAP_KEY,
+  VAULT_BIOMETRIC_LEGACY_WRAP_KEY,
+  VAULT_BIOMETRIC_PRF_SALT_KEY,
   VAULT_BIOMETRIC_WRAPPED_KEY,
   VAULT_GMAIL_KEY,
   VAULT_SALT_KEY,
@@ -21,6 +22,7 @@ import {
 // ---------------------------------------------------------------------------
 const PBKDF2_ITERATIONS = 100_000;
 const SALT_LENGTH = 16;
+const BIOMETRIC_PRF_SALT_LENGTH = 32;
 const IV_LENGTH = 12;
 const SENTINEL = "fincoach-vault-ok";
 
@@ -39,6 +41,30 @@ function _fromBase64(str) {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
+}
+
+function _toBase64Url(bytesLike) {
+  const bytes = _toUint8Array(bytesLike);
+  return _toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+}
+
+function _toUint8Array(value) {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  throw new TypeError("Expected ArrayBuffer or TypedArray");
+}
+
+async function _importBiometricWrapKey(prfOutput, usages) {
+  const normalized = _toUint8Array(prfOutput);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", normalized);
+  return globalThis.crypto.subtle.importKey("raw", digest, "AES-GCM", false, usages);
+}
+
+function _getBiometricPrfResult(credential) {
+  return credential?.getClientExtensionResults?.()?.prf?.results?.first ?? null;
 }
 
 async function _deriveKey(passphrase, salt) {
@@ -233,7 +259,47 @@ export const Vault = {
   },
 
   isBiometricEnabled() {
-    return !!localStorage.getItem(VAULT_BIOMETRIC_CRED_KEY);
+    const credId = localStorage.getItem(VAULT_BIOMETRIC_CRED_KEY);
+    if (!credId) return false;
+
+    if (localStorage.getItem(VAULT_BIOMETRIC_LEGACY_WRAP_KEY)) {
+      this.disableBiometric();
+      return false;
+    }
+
+    const prfSalt = localStorage.getItem(VAULT_BIOMETRIC_PRF_SALT_KEY);
+    const wrapped = localStorage.getItem(VAULT_BIOMETRIC_WRAPPED_KEY);
+    if (!prfSalt || !wrapped) {
+      this.disableBiometric();
+      return false;
+    }
+
+    return true;
+  },
+
+  async _getBiometricPrfOutput(credIdBytes, prfSaltBytes) {
+    const credIdKey = _toBase64Url(credIdBytes);
+    const credential = await navigator.credentials.get({
+      publicKey: {
+        allowCredentials: [{ id: credIdBytes, type: "public-key" }],
+        userVerification: "required",
+        challenge: globalThis.crypto.getRandomValues(new Uint8Array(32)),
+        extensions: {
+          prf: {
+            evalByCredential: {
+              [credIdKey]: { first: prfSaltBytes },
+            },
+          },
+        },
+      },
+    });
+
+    const prfFirst = _getBiometricPrfResult(credential);
+    if (!prfFirst) {
+      throw new Error("Biometric PRF unavailable");
+    }
+
+    return prfFirst;
   },
 
   async setupBiometric(passphrase) {
@@ -256,20 +322,26 @@ export const Vault = {
           authenticatorAttachment: "platform",
           userVerification: "required",
         },
+        extensions: {
+          prf: {
+            eval: {
+              first: globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH)),
+            },
+          },
+        },
       },
     });
 
     // Step 3: store credential ID
-    localStorage.setItem(VAULT_BIOMETRIC_CRED_KEY, _toBase64(credential.rawId));
+    const credIdBytes = _toUint8Array(credential.rawId);
+    localStorage.setItem(VAULT_BIOMETRIC_CRED_KEY, _toBase64(credIdBytes));
 
-    // Step 4: generate wrap key
-    const wrapBytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
-    const wrapKey = await globalThis.crypto.subtle.importKey("raw", wrapBytes, "AES-GCM", false, [
-      "encrypt",
-      "decrypt",
-    ]);
+    // Step 4: derive authenticator-bound wrap key using WebAuthn PRF
+    const prfSalt = globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH));
+    const prfOutput = await this._getBiometricPrfOutput(credIdBytes, prfSalt);
+    const wrapKey = await _importBiometricWrapKey(prfOutput, ["encrypt"]);
 
-    // Step 5: encrypt passphrase with wrap key
+    // Step 5: encrypt passphrase with authenticator-derived wrap key
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const ciphertext = await globalThis.crypto.subtle.encrypt(
       { name: "AES-GCM", iv },
@@ -280,38 +352,25 @@ export const Vault = {
     combined.set(iv, 0);
     combined.set(new Uint8Array(ciphertext), IV_LENGTH);
 
-    // Step 6: store wrap key and wrapped passphrase
-    localStorage.setItem(VAULT_BIOMETRIC_WRAP_KEY, _toBase64(wrapBytes));
+    // Step 6: store PRF salt and wrapped passphrase (legacy wrap-key storage is no longer used)
+    localStorage.removeItem(VAULT_BIOMETRIC_LEGACY_WRAP_KEY);
+    localStorage.setItem(VAULT_BIOMETRIC_PRF_SALT_KEY, _toBase64(prfSalt));
     localStorage.setItem(VAULT_BIOMETRIC_WRAPPED_KEY, _toBase64(combined));
   },
 
   async unlockWithBiometric() {
+    if (!this.isBiometricEnabled()) return false;
+
     const credIdB64 = localStorage.getItem(VAULT_BIOMETRIC_CRED_KEY);
-    if (!credIdB64) return false;
-
-    // Step 1: biometric challenge
-    try {
-      await navigator.credentials.get({
-        publicKey: {
-          allowCredentials: [{ id: _fromBase64(credIdB64), type: "public-key" }],
-          userVerification: "required",
-          challenge: globalThis.crypto.getRandomValues(new Uint8Array(32)),
-        },
-      });
-    } catch {
-      return false;
-    }
-
-    // Step 2: decrypt stored passphrase using wrap key
-    const wrapB64 = localStorage.getItem(VAULT_BIOMETRIC_WRAP_KEY);
+    const prfSaltB64 = localStorage.getItem(VAULT_BIOMETRIC_PRF_SALT_KEY);
     const wrappedB64 = localStorage.getItem(VAULT_BIOMETRIC_WRAPPED_KEY);
-    if (!wrapB64 || !wrappedB64) return false;
+    if (!credIdB64 || !prfSaltB64 || !wrappedB64) return false;
 
     try {
-      const wrapBytes = _fromBase64(wrapB64);
-      const wrapKey = await globalThis.crypto.subtle.importKey("raw", wrapBytes, "AES-GCM", false, [
-        "decrypt",
-      ]);
+      const credIdBytes = _fromBase64(credIdB64);
+      const prfSalt = _fromBase64(prfSaltB64);
+      const prfOutput = await this._getBiometricPrfOutput(credIdBytes, prfSalt);
+      const wrapKey = await _importBiometricWrapKey(prfOutput, ["decrypt"]);
       const combined = _fromBase64(wrappedB64);
       const iv = combined.slice(0, IV_LENGTH);
       const ciphertext = combined.slice(IV_LENGTH);
@@ -329,7 +388,8 @@ export const Vault = {
 
   disableBiometric() {
     localStorage.removeItem(VAULT_BIOMETRIC_CRED_KEY);
-    localStorage.removeItem(VAULT_BIOMETRIC_WRAP_KEY);
+    localStorage.removeItem(VAULT_BIOMETRIC_LEGACY_WRAP_KEY);
+    localStorage.removeItem(VAULT_BIOMETRIC_PRF_SALT_KEY);
     localStorage.removeItem(VAULT_BIOMETRIC_WRAPPED_KEY);
   },
 };
