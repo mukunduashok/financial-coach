@@ -4105,6 +4105,14 @@ describe("Session Wipe", () => {
 		const sensitiveKeys = [
 			"fincoach-gmail-settings",
 			"fincoach-ai-settings",
+			"fincoach-vault-salt",
+			"fincoach-vault-sentinel",
+			"fincoach-vault-ai",
+			"fincoach-vault-gmail",
+			"fincoach-vault-biometric-cred",
+			"fincoach-vault-biometric-prf-salt",
+			"fincoach-vault-biometric-wrapped",
+			"fincoach-vault-biometric-wrap",
 			"fincoach-gdrive-enabled",
 			"fincoach-gdrive-last-sync",
 			"fincoach-gdrive-backup-api-key",
@@ -4136,6 +4144,14 @@ describe("Session Wipe", () => {
 
 	// Individual tests for each of the 7 new security-fix keys
 	const newSecurityKeys = [
+		["fincoach-vault-salt", "VAULT_SALT_KEY"],
+		["fincoach-vault-sentinel", "VAULT_SENTINEL_KEY"],
+		["fincoach-vault-ai", "VAULT_AI_KEY"],
+		["fincoach-vault-gmail", "VAULT_GMAIL_KEY"],
+		["fincoach-vault-biometric-cred", "VAULT_BIOMETRIC_CRED_KEY"],
+		["fincoach-vault-biometric-prf-salt", "VAULT_BIOMETRIC_PRF_SALT_KEY"],
+		["fincoach-vault-biometric-wrapped", "VAULT_BIOMETRIC_WRAPPED_KEY"],
+		["fincoach-vault-biometric-wrap", "VAULT_BIOMETRIC_LEGACY_WRAP_KEY"],
 		["fincoach-gmail-custom-senders", "GMAIL_CUSTOM_SENDERS_KEY"],
 		["fincoach-gmail-auto-sync-enabled", "GMAIL_AUTO_SYNC_ENABLED_KEY"],
 		["fincoach-gmail-auto-sync-last", "GMAIL_AUTO_SYNC_LAST_KEY"],

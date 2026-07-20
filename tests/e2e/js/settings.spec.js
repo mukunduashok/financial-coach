@@ -766,26 +766,44 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 		return Buffer.from(encodeURIComponent(JSON.stringify(payload))).toString("base64");
 	}
 
+	function buildOAuthState() {
+		return Buffer.from(
+			JSON.stringify({
+				origin: "http://localhost",
+				nonce: "test-oauth-nonce",
+				issued_at: Date.now(),
+			}),
+		).toString("base64");
+	}
+
 	// Navigate to the app with a ?gmail-oauth=1#<fragment> URL and wait for the app to boot
-	async function gotoWithOAuth(page, fragment) {
-		await page.addInitScript(() => {
+	async function gotoWithOAuth(page, fragment, rawState = null) {
+		await page.addInitScript((state) => {
 			localStorage.setItem("fincoach-onboarded", "true");
-		});
+			if (state) {
+				sessionStorage.setItem(
+					"fincoach-gmail-oauth-pending-state",
+					JSON.stringify({ rawState: state, issuedAt: Date.now() }),
+				);
+			}
+		}, rawState);
 		await page.goto(`/?gmail-oauth=1#${fragment}`);
 		await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
 		await page.waitForSelector("#screen");
 	}
 
 	test("success payload — URL cleaned, tokens saved, success toast shown", async ({ page }) => {
+		const rawState = buildOAuthState();
 		const fragment = encodePayload({
 			type: "gmail-oauth",
 			status: "success",
+			state: rawState,
 			access_token: "test-access-token-123",
 			refresh_token: "test-refresh-token-456",
 			expires_in: 3600,
 		});
 
-		await gotoWithOAuth(page, fragment);
+		await gotoWithOAuth(page, fragment, rawState);
 
 		// URL search must be cleaned — no ?gmail-oauth param remains
 		const search = await page.evaluate(() => window.location.search);
@@ -811,13 +829,15 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 	});
 
 	test("error payload — URL cleaned, no tokens saved, error toast shown", async ({ page }) => {
+		const rawState = buildOAuthState();
 		const fragment = encodePayload({
 			type: "gmail-oauth",
 			status: "error",
+			state: rawState,
 			error: "access_denied",
 		});
 
-		await gotoWithOAuth(page, fragment);
+		await gotoWithOAuth(page, fragment, rawState);
 
 		// URL cleaned
 		const search = await page.evaluate(() => window.location.search);

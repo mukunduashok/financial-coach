@@ -268,8 +268,14 @@ describe("callbackHTML \u2014 redirect fallback (iOS PWA)", () => {
 		expect(html).toContain('t !== "null"');
 	});
 
-	it("payload in generated script contains expected gmail-oauth fields", async () => {
-		const state = btoa(JSON.stringify({ origin: "http://localhost:8080" }));
+	it("payload in generated script contains expected gmail-oauth fields and echoes state", async () => {
+		const state = btoa(
+			JSON.stringify({
+				origin: "http://localhost:8080",
+				nonce: "nonce-123",
+				issued_at: 1_700_000_000_000,
+			}),
+		);
 		const req = makeRequest("/auth/callback", {
 			searchParams: { code: "auth-code", state },
 		});
@@ -278,7 +284,28 @@ describe("callbackHTML \u2014 redirect fallback (iOS PWA)", () => {
 
 		expect(html).toContain('"type":"gmail-oauth"');
 		expect(html).toContain('"status":"success"');
+		expect(html).toContain(`"state":"${state}"`);
 		expect(html).toContain('"access_token":"tok"');
 		expect(html).toContain('"refresh_token":"ref"');
+	});
+
+	it("error payload also echoes state for browser-side csrf validation", async () => {
+		const state = btoa(
+			JSON.stringify({
+				origin: "http://localhost:8080",
+				nonce: "nonce-err",
+				issued_at: 1_700_000_000_000,
+			}),
+		);
+		const req = makeRequest("/auth/callback", {
+			searchParams: { error: "access_denied", state },
+		});
+		const resp = await workerModule.fetch(req, mockEnv);
+		const html = await resp.text();
+
+		expect(resp.status).toBe(400);
+		expect(html).toContain('"status":"error"');
+		expect(html).toContain(`"state":"${state}"`);
+		expect(html).toContain('"error":"access_denied"');
 	});
 });

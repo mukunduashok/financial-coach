@@ -36,6 +36,8 @@ const { DB } = await import("../../static/js/db.js");
 vi.mock("../../static/js/config.js", () => ({
 	GMAIL_PROXY_URL: "https://proxy.example.com",
 	GMAIL_SETTINGS_KEY: "fincoach-gmail-settings",
+	GMAIL_OAUTH_PENDING_STATE_KEY: "fincoach-gmail-oauth-pending-state",
+	GMAIL_OAUTH_STATE_TTL_MS: 300_000,
 	AI_SETTINGS_KEY: "fincoach-ai-settings",
 	GMAIL_CUSTOM_SENDERS_KEY: "fincoach-gmail-custom-senders",
 	GMAIL_AUTO_SYNC_ENABLED_KEY: "fincoach-gmail-auto-sync-enabled",
@@ -81,11 +83,17 @@ const localStorageMock = {
 };
 Object.defineProperty(globalThis, "localStorage", { value: localStorageMock, writable: true });
 
+function getPendingOAuthState() {
+	const raw = sessionStorage.getItem("fincoach-gmail-oauth-pending-state");
+	return raw ? JSON.parse(raw) : null;
+}
+
 const originalFetch = globalThis.fetch;
 const originalOpen = globalThis.open;
 
 beforeEach(async () => {
   localStorageData = {};
+  sessionStorage.clear();
   vi.restoreAllMocks();
   globalThis.fetch = originalFetch;
   globalThis.open = originalOpen;
@@ -94,6 +102,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  sessionStorage.clear();
   vi.restoreAllMocks();
   globalThis.fetch = originalFetch;
   globalThis.open = originalOpen;
@@ -164,29 +173,52 @@ describe("Gmail OAuth", () => {
     );
   });
 
-  it("connect() state parameter decodes to {origin} with correct value (no nonce)", async () => {
+  it("connect() stores browser-bound state with origin, nonce, and issued_at", async () => {
     const expectedOrigin = window.location.origin;
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ auth_url: "https://accounts.google.com/o/oauth2/auth?..." }),
     });
-    globalThis.open = vi.fn().mockReturnValue(null);
-    await Gmail.connect().catch(() => {});
+    const mockPopup = { closed: false };
+    globalThis.open = vi.fn().mockReturnValue(mockPopup);
 
-    // Extract the URL passed to fetch
+    const connectPromise = Gmail.connect();
+    await new Promise((r) => setTimeout(r, 0));
+
     const fetchUrl = globalThis.fetch.mock.calls[0][0];
     const url = new URL(fetchUrl);
     const rawState = url.searchParams.get("state");
     expect(rawState).toBeTruthy();
 
-    // Decode and parse the state parameter
     const decoded = JSON.parse(atob(rawState));
-
-    // Assert: origin matches window.location.origin at connect() call time
     expect(decoded.origin).toBe(expectedOrigin);
+    expect(typeof decoded.nonce).toBe("string");
+    expect(decoded.nonce.length).toBeGreaterThan(10);
+    expect(typeof decoded.issued_at).toBe("number");
 
-    // Assert: no nonce — CSRF prevented by ALLOWED_ORIGIN check in worker
-    expect(decoded.nonce).toBeUndefined();
+    const pending = getPendingOAuthState();
+    expect(pending).toEqual(
+      expect.objectContaining({
+        rawState,
+        issuedAt: decoded.issued_at,
+      }),
+    );
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://proxy.example.com",
+        data: {
+          type: "gmail-oauth",
+          status: "success",
+          state: rawState,
+          access_token: "valid-tok",
+          refresh_token: "valid-ref",
+          expires_in: 3600,
+        },
+      }),
+    );
+
+    await connectPromise;
   });
 });
 
@@ -238,6 +270,7 @@ describe("OAuth onMessage origin guard", () => {
         data: {
           type: "gmail-oauth",
           status: "success",
+          state: getPendingOAuthState().rawState,
           access_token: "valid-tok",
           refresh_token: "valid-ref",
           expires_in: 3600,
@@ -269,6 +302,7 @@ describe("OAuth onMessage origin guard", () => {
         data: {
           type: "gmail-oauth",
           status: "success",
+          state: getPendingOAuthState().rawState,
           access_token: "real-tok",
           refresh_token: "real-ref",
           expires_in: 3600,
@@ -280,6 +314,36 @@ describe("OAuth onMessage origin guard", () => {
     expect(result).toEqual({ connected: true });
     expect(Gmail.isConnected()).toBe(true);
     expect(Gmail.getSettings().accessToken).toBe("real-tok");
+  });
+
+  it("rejects postMessage with mismatched oauth state even from the correct proxy origin", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ auth_url: "https://accounts.google.com/auth" }),
+    });
+    const mockPopup = { closed: false };
+    globalThis.open = vi.fn().mockReturnValue(mockPopup);
+
+    const connectPromise = Gmail.connect();
+    await new Promise((r) => setTimeout(r, 0));
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://proxy.example.com",
+        data: {
+          type: "gmail-oauth",
+          status: "success",
+          state: "attacker-supplied-state",
+          access_token: "bad-tok",
+          refresh_token: "bad-ref",
+          expires_in: 3600,
+        },
+      }),
+    );
+
+    await expect(connectPromise).rejects.toThrow("Invalid OAuth state.");
+    expect(Gmail.isConnected()).toBe(false);
+    expect(getPendingOAuthState()).toBeNull();
   });
 
   it("postMessage resolves auth even when popup would throw on closed access (COOP)", async () => {
@@ -311,6 +375,7 @@ describe("OAuth onMessage origin guard", () => {
         data: {
           type: "gmail-oauth",
           status: "success",
+          state: getPendingOAuthState().rawState,
           access_token: "coop-tok",
           refresh_token: "coop-ref",
           expires_in: 3600,
@@ -3041,6 +3106,7 @@ describe("connect() — post-OAuth sub fetch", () => {
 				data: {
 					type: "gmail-oauth",
 					status: "success",
+					state: getPendingOAuthState().rawState,
 					access_token: "new-tok",
 					refresh_token: "new-ref",
 					expires_in: 3600,

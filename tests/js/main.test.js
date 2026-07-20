@@ -116,11 +116,12 @@ describe("Session Guard", () => {
 
   it("wipes session when last activity was more than 6 hours ago", async () => {
     const wipeSession = vi.fn(async () => {});
+    const lockVault = vi.fn();
     vi.doMock("../../static/js/db.js", () => ({
       DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession },
     }));
     vi.doMock("../../static/js/ai.js", () => ({}));
-    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/api.js", () => ({ API: { lockVault } }));
     vi.doMock("../../static/js/app.js", () => ({}));
     vi.doMock("../../static/js/gmail.js", () => ({}));
 
@@ -131,6 +132,7 @@ describe("Session Guard", () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(wipeSession).toHaveBeenCalledOnce();
+    expect(lockVault).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem("fincoach-session-expired")).toBe("1");
   });
 
@@ -346,14 +348,15 @@ describe("_handleOAuthCallback (iOS PWA OAuth redirect)", () => {
     vi.spyOn(history, "replaceState").mockImplementation(() => {});
   }
 
-  function setupDefaultMocks() {
+  function setupDefaultMocks({ consumePendingOAuthState = vi.fn(() => true) } = {}) {
     vi.doMock("../../static/js/db.js", () => ({
       DB: { init: vi.fn().mockResolvedValue(undefined), wipeSession: vi.fn(async () => {}) },
     }));
     vi.doMock("../../static/js/ai.js", () => ({}));
     vi.doMock("../../static/js/api.js", () => ({}));
     vi.doMock("../../static/js/app.js", () => ({}));
-    vi.doMock("../../static/js/gmail.js", () => ({}));
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { consumePendingOAuthState } }));
+    return { consumePendingOAuthState };
   }
 
   it("is a no-op when ?gmail-oauth param is absent", async () => {
@@ -368,20 +371,22 @@ describe("_handleOAuthCallback (iOS PWA OAuth redirect)", () => {
   });
 
   it("saves tokens to localStorage when success payload is present", async () => {
+    const { consumePendingOAuthState } = setupDefaultMocks();
     const payload = {
       type: "gmail-oauth",
       status: "success",
+      state: "valid-oauth-state",
       access_token: "at123",
       refresh_token: "rt456",
       expires_in: 3600,
     };
     const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
     mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
-    setupDefaultMocks();
 
     await import("../../static/js/main.js");
     await new Promise((r) => setTimeout(r, 50));
 
+    expect(consumePendingOAuthState).toHaveBeenCalledWith("valid-oauth-state");
     const saved = JSON.parse(localStorage.getItem("fincoach-gmail-settings"));
     expect(saved.accessToken).toBe("at123");
     expect(saved.refreshToken).toBe("rt456");
@@ -390,16 +395,45 @@ describe("_handleOAuthCallback (iOS PWA OAuth redirect)", () => {
   });
 
   it("stores error message in sessionStorage when status is error", async () => {
-    const payload = { type: "gmail-oauth", status: "error", error: "access_denied" };
+    const { consumePendingOAuthState } = setupDefaultMocks();
+    const payload = {
+      type: "gmail-oauth",
+      status: "error",
+      state: "valid-oauth-state",
+      error: "access_denied",
+    };
     const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
     mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
-    setupDefaultMocks();
 
     await import("../../static/js/main.js");
     await new Promise((r) => setTimeout(r, 50));
 
+    expect(consumePendingOAuthState).toHaveBeenCalledWith("valid-oauth-state");
     expect(sessionStorage.getItem("gmail-oauth-redirect-error")).toBe("access_denied");
     expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+  });
+
+  it("rejects redirect payload when oauth state validation fails", async () => {
+    const consumePendingOAuthState = vi.fn(() => false);
+    const payload = {
+      type: "gmail-oauth",
+      status: "success",
+      state: "attacker-state",
+      access_token: "at123",
+      refresh_token: "rt456",
+      expires_in: 3600,
+    };
+    const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
+    mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
+    setupDefaultMocks({ consumePendingOAuthState });
+
+    await import("../../static/js/main.js");
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(consumePendingOAuthState).toHaveBeenCalledWith("attacker-state");
+    expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
+    expect(sessionStorage.getItem("gmail-oauth-redirect-success")).toBeNull();
+    expect(sessionStorage.getItem("gmail-oauth-redirect-error")).toBe("Invalid OAuth state");
   });
 
   it("silently ignores malformed base64 without throwing", async () => {
@@ -413,19 +447,21 @@ describe("_handleOAuthCallback (iOS PWA OAuth redirect)", () => {
   });
 
   it("ignores success payload when access_token is missing", async () => {
+    const { consumePendingOAuthState } = setupDefaultMocks();
     const payload = {
       type: "gmail-oauth",
       status: "success",
+      state: "valid-oauth-state",
       refresh_token: "rt456",
       expires_in: 3600,
     };
     const encoded = btoa(encodeURIComponent(JSON.stringify(payload)));
     mockLocation({ search: "?gmail-oauth=1", hash: `#${encoded}` });
-    setupDefaultMocks();
 
     await import("../../static/js/main.js");
     await new Promise((r) => setTimeout(r, 50));
 
+    expect(consumePendingOAuthState).toHaveBeenCalledWith("valid-oauth-state");
     expect(localStorage.getItem("fincoach-gmail-settings")).toBeNull();
     expect(sessionStorage.getItem("gmail-oauth-redirect-success")).toBeNull();
   });

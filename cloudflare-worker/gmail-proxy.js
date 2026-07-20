@@ -63,10 +63,10 @@ async function handleCallback(request, env) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
-
-  // CSRF is prevented by ALLOWED_ORIGIN validation — state payload carries only the target origin.
-  // Derive the target origin from the OAuth state parameter
   const rawState = url.searchParams.get("state") || "";
+
+  // Derive the target origin from the OAuth state parameter.
+  // The browser validates the state as a session-bound nonce before accepting the callback.
   let targetOrigin = "null"; // safe fallback — browser silently drops the message
   if (rawState) {
     try {
@@ -80,17 +80,20 @@ async function handleCallback(request, env) {
   }
 
   if (error) {
-    return new Response(callbackHTML("error", { error }, targetOrigin), {
+    return new Response(callbackHTML("error", { error, state: rawState }, targetOrigin), {
       status: 400,
       headers: { "Content-Type": "text/html" },
     });
   }
 
   if (!code) {
-    return new Response(callbackHTML("error", { error: "No authorization code received" }, targetOrigin), {
-      status: 400,
-      headers: { "Content-Type": "text/html" },
-    });
+    return new Response(
+      callbackHTML("error", { error: "No authorization code received", state: rawState }, targetOrigin),
+      {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      },
+    );
   }
 
   try {
@@ -108,15 +111,19 @@ async function handleCallback(request, env) {
 
     if (!tokenResp.ok) {
       const errBody = await tokenResp.text();
-      return new Response(callbackHTML("error", { error: `Token exchange failed: ${errBody}` }, targetOrigin), {
-        status: 500,
-        headers: { "Content-Type": "text/html" },
-      });
+      return new Response(
+        callbackHTML("error", { error: `Token exchange failed: ${errBody}`, state: rawState }, targetOrigin),
+        {
+          status: 500,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     }
 
     const tokens = await tokenResp.json();
     return new Response(
       callbackHTML("success", {
+        state: rawState,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
@@ -127,7 +134,7 @@ async function handleCallback(request, env) {
       },
     );
   } catch (err) {
-    return new Response(callbackHTML("error", { error: err.message }, targetOrigin), {
+    return new Response(callbackHTML("error", { error: err.message, state: rawState }, targetOrigin), {
       status: 500,
       headers: { "Content-Type": "text/html" },
     });

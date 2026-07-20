@@ -12,6 +12,8 @@ import {
   GMAIL_AUTO_SYNC_INTERVAL_MS,
   GMAIL_AUTO_SYNC_LAST_KEY,
   GMAIL_CUSTOM_SENDERS_KEY,
+  GMAIL_OAUTH_PENDING_STATE_KEY,
+  GMAIL_OAUTH_STATE_TTL_MS,
   GMAIL_PROXY_URL,
   GMAIL_SETTINGS_KEY,
   VAULT_GMAIL_KEY,
@@ -74,6 +76,13 @@ const BANK_EMAIL_PATTERNS = {
 const ACCOUNT_TYPES = new Set(["savings", "current", "credit", "debit", "deposit"]);
 const BALANCE_ACCOUNT_TYPES = new Set(["savings", "current", "deposit"]);
 const AZURE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}[a-zA-Z0-9]$/;
+
+function _toBase64Url(bytes) {
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/u, "");
+}
 
 const AI_PROVIDERS = {
   groq: {
@@ -170,6 +179,46 @@ export const Gmail = {
     return this.getSettings().sub ?? "";
   },
 
+  _createPendingOAuthState() {
+    const nonceBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    const payload = {
+      origin: window.location.origin,
+      nonce: _toBase64Url(nonceBytes),
+      issued_at: Date.now(),
+    };
+    const rawState = btoa(JSON.stringify(payload));
+    sessionStorage.setItem(
+      GMAIL_OAUTH_PENDING_STATE_KEY,
+      JSON.stringify({ rawState, issuedAt: payload.issued_at }),
+    );
+    return rawState;
+  },
+
+  _clearPendingOAuthState() {
+    sessionStorage.removeItem(GMAIL_OAUTH_PENDING_STATE_KEY);
+  },
+
+  consumePendingOAuthState(rawState) {
+    let pending = null;
+    try {
+      const raw = sessionStorage.getItem(GMAIL_OAUTH_PENDING_STATE_KEY);
+      pending = raw ? JSON.parse(raw) : null;
+    } catch {
+      pending = null;
+    }
+
+    if (!pending?.rawState || typeof pending.issuedAt !== "number") {
+      this._clearPendingOAuthState();
+      return false;
+    }
+
+    const isExpired = Date.now() - pending.issuedAt > GMAIL_OAUTH_STATE_TTL_MS;
+    const isMatch = typeof rawState === "string" && rawState === pending.rawState;
+
+    this._clearPendingOAuthState();
+    return !isExpired && isMatch;
+  },
+
   // ==========================================================================
   // OAuth
   // ==========================================================================
@@ -179,16 +228,21 @@ export const Gmail = {
   },
 
   async connect() {
-    // CSRF is prevented by the worker's ALLOWED_ORIGIN check — no nonce needed.
     const isStandalonePwa = navigator.standalone === true;
-    const state = btoa(JSON.stringify({ origin: window.location.origin }));
-    const resp = await fetchWithTimeout(
-      `${GMAIL_PROXY_URL}/auth/url?state=${encodeURIComponent(state)}`,
-    );
-    if (!resp.ok) throw new Error("Failed to get auth URL from proxy");
-    const data = await resp.json();
-    const authUrl = data.auth_url;
-    if (!authUrl) throw new Error("No auth URL returned");
+    const state = this._createPendingOAuthState();
+    let authUrl;
+    try {
+      const resp = await fetchWithTimeout(
+        `${GMAIL_PROXY_URL}/auth/url?state=${encodeURIComponent(state)}`,
+      );
+      if (!resp.ok) throw new Error("Failed to get auth URL from proxy");
+      const data = await resp.json();
+      authUrl = data.auth_url;
+      if (!authUrl) throw new Error("No auth URL returned");
+    } catch (err) {
+      this._clearPendingOAuthState();
+      throw err;
+    }
 
     // iOS PWA: window.open() breaks out of the WKWebView; use redirect flow instead
     if (isStandalonePwa) {
@@ -199,6 +253,7 @@ export const Gmail = {
     return new Promise((resolve, reject) => {
       const popup = window.open(authUrl, "gmail-oauth", "width=500,height=600");
       if (!popup) {
+        Gmail._clearPendingOAuthState();
         reject(new Error("Popup blocked. Please allow popups for this site."));
         return;
       }
@@ -207,6 +262,11 @@ export const Gmail = {
         if (event.origin !== new URL(GMAIL_PROXY_URL).origin) return;
         if (event.data?.type !== "gmail-oauth") return;
         cleanup();
+
+        if (!Gmail.consumePendingOAuthState(event.data.state || "")) {
+          reject(new Error("Invalid OAuth state."));
+          return;
+        }
 
         if (event.data.status === "success") {
           const tokenExpiry = Date.now() + (event.data.expires_in || 3600) * 1000;
@@ -236,6 +296,7 @@ export const Gmail = {
       const timeout = setTimeout(() => {
         if (done) return;
         cleanup();
+        Gmail._clearPendingOAuthState();
         reject(new Error("OAuth timed out"));
       }, 300000);
 
@@ -247,6 +308,7 @@ export const Gmail = {
         setTimeout(() => {
           if (!done) {
             cleanup();
+            Gmail._clearPendingOAuthState();
             reject(new Error("Sign-in cancelled"));
           }
         }, 500);

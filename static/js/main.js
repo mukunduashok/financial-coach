@@ -1,6 +1,6 @@
 import { DB } from "./db.js";
 import "./ai.js";
-import "./api.js";
+import { API } from "./api.js";
 import "./app.js";
 import {
   GMAIL_SETTINGS_KEY,
@@ -9,6 +9,7 @@ import {
   SESSION_LAST_ACTIVITY_KEY,
   TRUSTED_DEVICE_KEY,
 } from "./config.js";
+import { Gmail } from "./gmail.js";
 import { Vault } from "./vault.js";
 
 function _handleOAuthCallback() {
@@ -24,6 +25,11 @@ function _handleOAuthCallback() {
   try {
     const payload = JSON.parse(decodeURIComponent(atob(fragment)));
     if (payload.type !== "gmail-oauth") return;
+
+    if (!Gmail.consumePendingOAuthState(payload.state || "")) {
+      sessionStorage.setItem("gmail-oauth-redirect-error", "Invalid OAuth state");
+      return;
+    }
 
     if (payload.status === "success") {
       if (!payload.access_token || !payload.refresh_token) return;
@@ -52,6 +58,7 @@ async function boot() {
       const last = Number.parseInt(localStorage.getItem(SESSION_LAST_ACTIVITY_KEY) || "0", 10);
       if (last > 0 && Date.now() - last > SESSION_EXPIRY_MS) {
         await DB.wipeSession();
+        API.lockVault();
         sessionStorage.setItem("fincoach-session-expired", "1");
       }
     }
@@ -98,6 +105,7 @@ setInterval(() => {
   const last = Number.parseInt(localStorage.getItem(SESSION_LAST_ACTIVITY_KEY) || "0", 10);
   if (last > 0 && Date.now() - last > SESSION_EXPIRY_MS) {
     DB.wipeSession().then(() => {
+      API.lockVault();
       sessionStorage.setItem("fincoach-session-expired", "1");
       window.location.reload();
     });
