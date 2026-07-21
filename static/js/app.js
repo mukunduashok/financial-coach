@@ -2533,6 +2533,15 @@ function clearGmailVaultGateToasts() {
   }
 }
 
+function isNumericPin(value) {
+  return /^\d{4,}$/u.test(value);
+}
+
+function pinInputAttrs(preferNumeric = API.prefersNumericPinInput(), enterKeyHint = "done") {
+  const base = `enterkeyhint="${enterKeyHint}" autocapitalize="off" autocorrect="off" spellcheck="false"`;
+  return preferNumeric ? `inputmode="numeric" ${base}` : base;
+}
+
 async function continuePendingGmailConnect() {
   if (sessionStorage.getItem(GMAIL_CONNECT_PENDING_KEY) !== "1") return;
   clearPendingGmailConnect();
@@ -6669,6 +6678,7 @@ function renderVaultUnlock() {
   const existing = document.getElementById("vault-unlock-screen");
   if (existing) return;
   const biometricEnabled = API.isBiometricEnabled();
+  const unlockPinAttrs = pinInputAttrs(API.prefersNumericPinInput(), "done");
   const overlay = document.createElement("div");
   overlay.id = "vault-unlock-screen";
   overlay.className = "modal-overlay";
@@ -6691,8 +6701,7 @@ function renderVaultUnlock() {
       <div class="form-group" style="margin-bottom:var(--space-md,1rem)">
         <label class="form-label">PIN</label>
         <input type="password" id="vault-unlock-passphrase" class="form-control"
-               placeholder="Enter PIN" autocomplete="current-password" inputmode="numeric"
-               enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
+               placeholder="Enter PIN" autocomplete="current-password" ${unlockPinAttrs}>
       </div>
       <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap">
         <button class="btn btn-primary" data-action="unlock-vault">Unlock</button>
@@ -6713,6 +6722,11 @@ async function doUnlockVault() {
   const passphrase = input.value.trim();
   if (!passphrase) {
     errEl.textContent = "Please enter your PIN.";
+    errEl.style.display = "";
+    return;
+  }
+  if (API.prefersNumericPinInput() && !isNumericPin(passphrase)) {
+    errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
   }
@@ -6748,7 +6762,7 @@ async function doUnlockWithBiometric() {
       await continuePendingGmailConnect();
     } else {
       if (errEl) {
-        errEl.textContent = "Biometric unlock failed. Please enter your passphrase.";
+        errEl.textContent = "Biometric unlock failed. Please enter your PIN.";
         errEl.style.display = "";
       }
     }
@@ -6767,16 +6781,17 @@ async function doDisableBiometric() {
 }
 
 function doSetupBiometric() {
+  const currentPinAttrs = pinInputAttrs(API.prefersNumericPinInput(), "done");
   const html = `
     <div id="biometric-setup-modal" class="modal-overlay" style="z-index:10000">
       <div class="modal">
         <h3>Enable Biometric Unlock</h3>
         <p>Your device will ask for fingerprint or face verification to confirm setup.</p>
-        <p class="text-muted" style="font-size:0.85em">Biometric is a convenience layer only — your passphrase remains the primary security key.</p>
+        <p class="text-muted" style="font-size:0.85em">Biometric is a convenience layer only — your PIN remains the primary security key.</p>
         <div id="biometric-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
-          <label class="form-label">Confirm your current passphrase</label>
-          <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter PIN" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <label class="form-label">Confirm your current PIN</label>
+          <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter PIN" ${currentPinAttrs}>
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-confirm-biometric-setup">Enable</button>
@@ -6791,7 +6806,12 @@ async function doConfirmBiometricSetup() {
   const passphrase = document.getElementById("biometric-setup-passphrase")?.value || "";
   const errEl = document.getElementById("biometric-setup-error");
   if (!passphrase) {
-    errEl.textContent = "Please enter your passphrase.";
+    errEl.textContent = "Please enter your PIN.";
+    errEl.style.display = "";
+    return;
+  }
+  if (API.prefersNumericPinInput() && !isNumericPin(passphrase)) {
+    errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
   }
@@ -6826,6 +6846,8 @@ function showVaultForgotModal() {
 }
 
 function showVaultSetupModal() {
+  const newPinAttrs = pinInputAttrs(true, "next");
+  const confirmPinAttrs = pinInputAttrs(true, "done");
   const html = `
     <div id="vault-setup-modal" class="modal-overlay" style="z-index:10000">
       <div class="modal">
@@ -6834,12 +6856,12 @@ function showVaultSetupModal() {
         <p class="text-muted">If you forget your PIN, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
         <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
-          <label class="form-label">PIN <span class="text-muted">(min 4 digits/characters)</span></label>
-          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <label class="form-label">PIN <span class="text-muted">(digits only, min 4)</span></label>
+          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password" ${newPinAttrs}>
         </div>
         <div class="form-group">
           <label class="form-label">Confirm PIN</label>
-          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat PIN" autocomplete="new-password" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat PIN" autocomplete="new-password" ${confirmPinAttrs}>
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-setup-vault">Set PIN</button>
@@ -6854,8 +6876,8 @@ async function doSetupVault() {
   const passphrase = document.getElementById("vault-setup-passphrase")?.value || "";
   const confirm = document.getElementById("vault-setup-confirm")?.value || "";
   const errEl = document.getElementById("vault-setup-error");
-  if (passphrase.length < 4) {
-    errEl.textContent = "PIN must be at least 4 characters.";
+  if (!isNumericPin(passphrase)) {
+    errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
   }
@@ -6879,6 +6901,9 @@ async function doSetupVault() {
 }
 
 function showChangePassphraseModal() {
+  const currentPinAttrs = pinInputAttrs(API.prefersNumericPinInput(), "next");
+  const newPinAttrs = pinInputAttrs(true, "next");
+  const confirmPinAttrs = pinInputAttrs(true, "done");
   const html = `
     <div id="vault-change-modal" class="modal-overlay" style="z-index:10000">
       <div class="modal">
@@ -6886,15 +6911,15 @@ function showChangePassphraseModal() {
         <div id="vault-change-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
           <label class="form-label">Current PIN</label>
-          <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password" ${currentPinAttrs}>
         </div>
         <div class="form-group">
-          <label class="form-label">New PIN <span class="text-muted">(min 4 digits/characters)</span></label>
-          <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <label class="form-label">New PIN <span class="text-muted">(digits only, min 4)</span></label>
+          <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password" ${newPinAttrs}>
         </div>
         <div class="form-group">
           <label class="form-label">Confirm new PIN</label>
-          <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password" ${confirmPinAttrs}>
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-change-passphrase">Update PIN</button>
@@ -6910,8 +6935,8 @@ async function doChangePassphrase() {
   const newP = document.getElementById("vault-change-new")?.value || "";
   const confirmP = document.getElementById("vault-change-confirm")?.value || "";
   const errEl = document.getElementById("vault-change-error");
-  if (newP.length < 4) {
-    errEl.textContent = "New PIN must be at least 4 characters.";
+  if (!isNumericPin(newP)) {
+    errEl.textContent = "New PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
   }

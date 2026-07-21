@@ -8,7 +8,7 @@ import { test, expect } from "./fixtures.js";
 // Used in tests that exercise the unlock / reset flows, bypassing the
 // vault-setup button in settings (which is rendered only if the card exists).
 // ---------------------------------------------------------------------------
-async function setupAndLockVault(page, passphrase = "mysecurepass") {
+async function setupAndLockVault(page, passphrase = "1234") {
 	await page.evaluate(async (pp) => {
 		await window.API.setupVault(pp);
 		window.API.lockVault();
@@ -99,8 +99,8 @@ test.describe("Vault settings card", () => {
 		await page.click('[data-action="do-setup-vault"]');
 		await expect(page.locator("#vault-setup-error")).toBeVisible({ timeout: 3_000 });
 		// Mismatched passphrases
-		await page.fill("#vault-setup-passphrase", "validpass123");
-		await page.fill("#vault-setup-confirm", "differentpass");
+		await page.fill("#vault-setup-passphrase", "5678");
+		await page.fill("#vault-setup-confirm", "4321");
 		await page.click('[data-action="do-setup-vault"]');
 		await expect(page.locator("#vault-setup-error")).toBeVisible();
 	});
@@ -111,8 +111,8 @@ test.describe("Vault settings card", () => {
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
 		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
-		await page.fill("#vault-setup-passphrase", "mysecurepass");
-		await page.fill("#vault-setup-confirm", "mysecurepass");
+		await page.fill("#vault-setup-passphrase", "1234");
+		await page.fill("#vault-setup-confirm", "1234");
 		await page.click('[data-action="do-setup-vault"]');
 		// Vault.setup() writes the salt to localStorage before any UI update.
 		// Wait for the salt key to confirm crypto completed (PBKDF2 takes a few seconds).
@@ -135,8 +135,8 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
-		await page.fill("#vault-setup-passphrase", "mysecurepass");
-		await page.fill("#vault-setup-confirm", "mysecurepass");
+		await page.fill("#vault-setup-passphrase", "1234");
+		await page.fill("#vault-setup-confirm", "1234");
 		await page.click('[data-action="do-setup-vault"]');
 		// Wait for the vault salt to appear in localStorage (crypto complete).
 		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
@@ -157,14 +157,14 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
-		await page.fill("#vault-setup-passphrase", "mysecurepass");
-		await page.fill("#vault-setup-confirm", "mysecurepass");
+		await page.fill("#vault-setup-passphrase", "1234");
+		await page.fill("#vault-setup-confirm", "1234");
 		await page.click('[data-action="do-setup-vault"]');
 		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
 			timeout: 15_000,
 		});
 		await page.evaluate(async () => {
-			await window.API.setupBiometric("mysecurepass");
+			await window.API.setupBiometric("1234");
 		});
 		await page.goto("/#/");
 		await page.goto("/#/settings");
@@ -197,17 +197,17 @@ test.describe("Vault settings card", () => {
 test.describe("Vault unlock screen", () => {
 	test("Vault lock shows unlock screen on reload", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "mysecurepass");
+		await setupAndLockVault(page, "1234");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 	});
 
 	test("Vault unlock - wrong passphrase shows error", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "mysecurepass");
+		await setupAndLockVault(page, "1234");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		await expect(page.locator("#vault-unlock-passphrase")).toHaveAttribute("inputmode", "numeric");
 		// Enter wrong passphrase
-		await page.fill("#vault-unlock-passphrase", "wrongpassword");
+		await page.fill("#vault-unlock-passphrase", "9999");
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-error")).toBeVisible({ timeout: 5_000 });
 		// Unlock screen should still be visible
@@ -216,10 +216,10 @@ test.describe("Vault unlock screen", () => {
 
 	test("Vault unlock - correct passphrase dismisses screen", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "mysecurepass");
+		await setupAndLockVault(page, "1234");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Enter correct passphrase
-		await page.fill("#vault-unlock-passphrase", "mysecurepass");
+		await page.fill("#vault-unlock-passphrase", "1234");
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
 		// App should load normally
@@ -228,7 +228,7 @@ test.describe("Vault unlock screen", () => {
 
 	test("Vault forgot passphrase - shows reset modal", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "mysecurepass");
+		await setupAndLockVault(page, "1234");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Click forgot passphrase
 		await page.click('[data-action="vault-forgot-passphrase"]');
@@ -239,7 +239,7 @@ test.describe("Vault unlock screen", () => {
 		pwaPage,
 	}) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "mysecurepass");
+		await setupAndLockVault(page, "1234");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Click forgot passphrase
 		await page.click('[data-action="vault-forgot-passphrase"]');

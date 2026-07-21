@@ -13,6 +13,7 @@ import {
   VAULT_BIOMETRIC_PRF_SALT_KEY,
   VAULT_BIOMETRIC_WRAPPED_KEY,
   VAULT_GMAIL_KEY,
+  VAULT_PIN_KIND_KEY,
   VAULT_SALT_KEY,
   VAULT_SENTINEL_KEY,
 } from "./config.js";
@@ -71,6 +72,10 @@ async function _hasBiometricPrfSupport() {
   return false;
 }
 
+function _isNumericPin(value) {
+  return /^\d{4,}$/u.test(value);
+}
+
 async function _deriveKey(passphrase, salt) {
   const keyMaterial = await globalThis.crypto.subtle.importKey(
     "raw",
@@ -107,6 +112,14 @@ export const Vault = {
     return this._key !== null;
   },
 
+  requiresNumericPin() {
+    return localStorage.getItem(VAULT_PIN_KIND_KEY) === "numeric";
+  },
+
+  prefersNumericPinInput() {
+    return !this.isConfigured() || this.requiresNumericPin();
+  },
+
   async _encryptStr(plaintext) {
     if (!this._key) throw new Error("Vault is locked");
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
@@ -135,14 +148,19 @@ export const Vault = {
   },
 
   async setup(passphrase) {
+    if (!_isNumericPin(passphrase)) {
+      throw new Error("PIN must contain only digits and be at least 4 digits.");
+    }
     const salt = globalThis.crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
     this._key = await _deriveKey(passphrase, salt);
     localStorage.setItem(VAULT_SALT_KEY, _toBase64(salt));
     const encryptedSentinel = await this._encryptStr(SENTINEL);
     localStorage.setItem(VAULT_SENTINEL_KEY, encryptedSentinel);
+    localStorage.setItem(VAULT_PIN_KIND_KEY, "numeric");
   },
 
   async unlock(passphrase) {
+    if (this.requiresNumericPin() && !_isNumericPin(passphrase)) return false;
     const saltB64 = localStorage.getItem(VAULT_SALT_KEY);
     if (!saltB64) return false;
     const salt = _fromBase64(saltB64);
@@ -221,12 +239,16 @@ export const Vault = {
     localStorage.removeItem(VAULT_SENTINEL_KEY);
     localStorage.removeItem(VAULT_AI_KEY);
     localStorage.removeItem(VAULT_GMAIL_KEY);
+    localStorage.removeItem(VAULT_PIN_KIND_KEY);
     this._key = null;
   },
 
   async changePassphrase(oldPassphrase, newPassphrase) {
     const ok = await this.unlock(oldPassphrase);
     if (!ok) throw new Error("Wrong passphrase");
+    if (!_isNumericPin(newPassphrase)) {
+      throw new Error("New PIN must contain only digits and be at least 4 digits.");
+    }
 
     // Load existing encrypted blobs before re-keying
     const aiBlob = localStorage.getItem(VAULT_AI_KEY);

@@ -84,8 +84,10 @@ const mockAPI = {
   setupBiometric: vi.fn().mockResolvedValue(undefined),
   unlockWithBiometric: vi.fn().mockResolvedValue(true),
   disableBiometric: vi.fn(),
+  prefersNumericPinInput: vi.fn().mockReturnValue(true),
   isVaultConfigured: vi.fn().mockReturnValue(false),
   setupVault: vi.fn().mockResolvedValue(undefined),
+  changeVaultPassphrase: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock("../../static/js/api.js", () => ({ API: mockAPI }));
 
@@ -2921,7 +2923,7 @@ describe("Vault — PIN minimum 4 characters", () => {
     openVaultSetupModal();
     const modal = document.getElementById("vault-setup-modal");
     expect(modal).not.toBeNull();
-    expect(modal.textContent).toContain("min 4 digits/characters");
+    expect(modal.textContent).toContain("digits only, min 4");
     expect(modal.textContent).not.toContain("min 8 characters");
   });
 
@@ -2939,23 +2941,41 @@ describe("Vault — PIN minimum 4 characters", () => {
 
     const errEl = modal.querySelector("#vault-setup-error");
     expect(errEl.style.display).not.toBe("none");
-    expect(errEl.textContent).toContain("at least 4 characters");
+    expect(errEl.textContent).toContain("only digits and be at least 4 digits");
     expect(mockAPI.setupVault).not.toHaveBeenCalled();
   });
 
-  it("doSetupVault accepts 4-character passphrase and calls API.setupVault", async () => {
+	it("doSetupVault rejects non-numeric PINs", async () => {
+		openVaultSetupModal();
+		const modal = document.getElementById("vault-setup-modal");
+		expect(modal).not.toBeNull();
+
+		modal.querySelector("#vault-setup-passphrase").value = "12ab";
+		modal.querySelector("#vault-setup-confirm").value = "12ab";
+
+		const submitBtn = modal.querySelector('[data-action="do-setup-vault"]');
+		submitBtn.click();
+		await new Promise((r) => setTimeout(r, 0));
+
+		const errEl = modal.querySelector("#vault-setup-error");
+		expect(errEl.style.display).not.toBe("none");
+		expect(errEl.textContent).toContain("only digits and be at least 4 digits");
+		expect(mockAPI.setupVault).not.toHaveBeenCalled();
+	});
+
+  it("doSetupVault accepts 4-digit PIN and calls API.setupVault", async () => {
     openVaultSetupModal();
     const modal = document.getElementById("vault-setup-modal");
     expect(modal).not.toBeNull();
 
-    modal.querySelector("#vault-setup-passphrase").value = "abcd";
-    modal.querySelector("#vault-setup-confirm").value = "abcd";
+    modal.querySelector("#vault-setup-passphrase").value = "1234";
+    modal.querySelector("#vault-setup-confirm").value = "1234";
 
     const submitBtn = modal.querySelector('[data-action="do-setup-vault"]');
     submitBtn.click();
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockAPI.setupVault).toHaveBeenCalledWith("abcd");
+    expect(mockAPI.setupVault).toHaveBeenCalledWith("1234");
   });
 });
 

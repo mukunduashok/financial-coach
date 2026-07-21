@@ -36,6 +36,7 @@ export const VAULT_SALT_KEY = "fincoach-vault-salt";
 export const VAULT_SENTINEL_KEY = "fincoach-vault-sentinel";
 export const VAULT_AI_KEY = "fincoach-vault-ai";
 export const VAULT_GMAIL_KEY = "fincoach-vault-gmail";
+export const VAULT_PIN_KIND_KEY = "fincoach-vault-pin-kind";
 
 export const SESSION_LAST_ACTIVITY_KEY = "fincoach-session-last-activity";
 export const TRUSTED_DEVICE_KEY = "fincoach-trusted-device";

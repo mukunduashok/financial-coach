@@ -293,6 +293,9 @@ export const API = {
   isVaultUnlocked() {
     return Vault.isUnlocked();
   },
+  prefersNumericPinInput() {
+    return Vault.prefersNumericPinInput();
+  },
   async unlockVault(passphrase) {
     const ok = await Vault.unlock(passphrase);
     if (!ok) return false;
