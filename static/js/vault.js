@@ -43,11 +43,6 @@ function _fromBase64(str) {
   return bytes;
 }
 
-function _toBase64Url(bytesLike) {
-  const bytes = _toUint8Array(bytesLike);
-  return _toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
-}
-
 function _toUint8Array(value) {
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -286,7 +281,6 @@ export const Vault = {
   },
 
   async _getBiometricPrfOutput(credIdBytes, prfSaltBytes) {
-    const credIdKey = _toBase64Url(credIdBytes);
     const credential = await navigator.credentials.get({
       publicKey: {
         allowCredentials: [{ id: credIdBytes, type: "public-key" }],
@@ -294,8 +288,8 @@ export const Vault = {
         challenge: globalThis.crypto.getRandomValues(new Uint8Array(32)),
         extensions: {
           prf: {
-            evalByCredential: {
-              [credIdKey]: { first: prfSaltBytes },
+            eval: {
+              first: prfSaltBytes,
             },
           },
         },
@@ -315,6 +309,8 @@ export const Vault = {
     const ok = await this.unlock(passphrase);
     if (!ok) throw new Error("Incorrect passphrase");
 
+    const prfSalt = globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH));
+
     // Step 2: register platform credential
     const credential = await navigator.credentials.create({
       publicKey: {
@@ -333,7 +329,7 @@ export const Vault = {
         extensions: {
           prf: {
             eval: {
-              first: globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH)),
+              first: prfSalt,
             },
           },
         },
@@ -345,7 +341,6 @@ export const Vault = {
     // complete registration but do not immediately support a second get()
     // prompt in the same flow still enable biometric unlock successfully.
     const credIdBytes = _toUint8Array(credential.rawId);
-    const prfSalt = globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH));
     const createPrfOutput = _getBiometricPrfResult(credential);
     const prfOutput = createPrfOutput || (await this._getBiometricPrfOutput(credIdBytes, prfSalt));
     const wrapKey = await _importBiometricWrapKey(prfOutput, ["encrypt"]);

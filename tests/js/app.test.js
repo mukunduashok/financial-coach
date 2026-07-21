@@ -2973,6 +2973,7 @@ describe("Gmail connect vault gating", () => {
   afterEach(() => {
     document.getElementById("vault-setup-modal")?.remove();
     document.getElementById("vault-unlock-screen")?.remove();
+    document.querySelector(".toast-container")?.replaceChildren();
     mockAPI.getGmailConnectUrl.mockClear();
     mockAPI.setupVault.mockReset();
     mockAPI.unlockVault.mockReset();
@@ -3015,6 +3016,38 @@ describe("Gmail connect vault gating", () => {
     expect(mockAPI.getGmailConnectUrl).toHaveBeenCalledTimes(1);
   });
 
+	it("successful PIN setup from connect flow clears the stale PIN-required error toast", async () => {
+		mockAPI.isVaultConfigured.mockReturnValue(false);
+		mockAPI.isVaultUnlocked.mockReturnValue(false);
+		mockAPI.setupVault.mockImplementation(async () => {
+			mockAPI.isVaultConfigured.mockReturnValue(true);
+			mockAPI.isVaultUnlocked.mockReturnValue(true);
+		});
+		mockAPI.getGmailConnectUrl.mockResolvedValue({ connected: true });
+
+		const screen = await renderSettings();
+		screen.querySelector('[data-action="gdrive-connect"]').click();
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(
+			Array.from(document.querySelectorAll(".toast.error")).some((toast) =>
+				toast.textContent.includes("Set up a PIN before connecting Gmail."),
+			),
+		).toBe(true);
+
+		const modal = document.getElementById("vault-setup-modal");
+		modal.querySelector("#vault-setup-passphrase").value = "1234";
+		modal.querySelector("#vault-setup-confirm").value = "1234";
+		modal.querySelector('[data-action="do-setup-vault"]').click();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(
+			Array.from(document.querySelectorAll(".toast.error")).some((toast) =>
+				toast.textContent.includes("Set up a PIN before connecting Gmail."),
+			),
+		).toBe(false);
+	});
+
   it("successful unlock from connect flow automatically starts Gmail auth", async () => {
     mockAPI.isVaultConfigured.mockReturnValue(true);
     mockAPI.isVaultUnlocked.mockReturnValue(false);
@@ -3037,4 +3070,35 @@ describe("Gmail connect vault gating", () => {
     expect(mockAPI.unlockVault).toHaveBeenCalledWith("1234");
     expect(mockAPI.getGmailConnectUrl).toHaveBeenCalledTimes(1);
   });
+
+	it("successful unlock from connect flow clears the stale unlock-required error toast", async () => {
+		mockAPI.isVaultConfigured.mockReturnValue(true);
+		mockAPI.isVaultUnlocked.mockReturnValue(false);
+		mockAPI.unlockVault.mockImplementation(async () => {
+			mockAPI.isVaultUnlocked.mockReturnValue(true);
+			return true;
+		});
+		mockAPI.getGmailConnectUrl.mockResolvedValue({ connected: true });
+
+		const screen = await renderSettings();
+		screen.querySelector('[data-action="gdrive-connect"]').click();
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(
+			Array.from(document.querySelectorAll(".toast.error")).some((toast) =>
+				toast.textContent.includes("Unlock your PIN before connecting Gmail."),
+			),
+		).toBe(true);
+
+		const overlay = document.getElementById("vault-unlock-screen");
+		overlay.querySelector("#vault-unlock-passphrase").value = "1234";
+		overlay.querySelector('[data-action="unlock-vault"]').click();
+		await new Promise((r) => setTimeout(r, 50));
+
+		expect(
+			Array.from(document.querySelectorAll(".toast.error")).some((toast) =>
+				toast.textContent.includes("Unlock your PIN before connecting Gmail."),
+			),
+		).toBe(false);
+	});
 });

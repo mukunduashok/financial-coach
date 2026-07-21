@@ -2521,6 +2521,18 @@ function clearPendingGmailConnect() {
   sessionStorage.removeItem(GMAIL_CONNECT_PENDING_KEY);
 }
 
+function clearGmailVaultGateToasts() {
+  for (const toast of document.querySelectorAll(".toast.error")) {
+    const text = toast.textContent || "";
+    if (
+      text.includes("Set up a PIN before connecting Gmail.") ||
+      text.includes("Unlock your PIN before connecting Gmail.")
+    ) {
+      toast.remove();
+    }
+  }
+}
+
 async function continuePendingGmailConnect() {
   if (sessionStorage.getItem(GMAIL_CONNECT_PENDING_KEY) !== "1") return;
   clearPendingGmailConnect();
@@ -2656,6 +2668,7 @@ async function connectGmail() {
     return;
   }
 
+  clearGmailVaultGateToasts();
   clearPendingGmailConnect();
 
   try {
@@ -6707,6 +6720,7 @@ async function doUnlockVault() {
     if (ok) {
       const overlay = document.getElementById("vault-unlock-screen");
       if (overlay) overlay.remove();
+      clearGmailVaultGateToasts();
       document.dispatchEvent(new Event("db-ready"));
       await continuePendingGmailConnect();
     } else {
@@ -6728,6 +6742,7 @@ async function doUnlockWithBiometric() {
     if (ok) {
       const overlay = document.getElementById("vault-unlock-screen");
       if (overlay) overlay.remove();
+      clearGmailVaultGateToasts();
       document.dispatchEvent(new Event("db-ready"));
       await continuePendingGmailConnect();
     } else {
@@ -6853,6 +6868,7 @@ async function doSetupVault() {
     return;
   }
   document.getElementById("vault-setup-modal")?.remove();
+  clearGmailVaultGateToasts();
   Toast.success("Credentials are now PIN-protected.");
   if (window.location.hash.startsWith("#/settings")) await renderSettings();
   await continuePendingGmailConnect();

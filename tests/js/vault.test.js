@@ -476,6 +476,52 @@ describe("setupBiometric()", () => {
 		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeTruthy();
 		expect(mockGet).not.toHaveBeenCalled();
 	});
+
+	it("stores the same PRF salt used during setup so biometric unlock still works after a create-time PRF result", async () => {
+		await Vault.setup("mypass");
+		const derivePrfForSalt = (saltBytes) => {
+			const salt = new Uint8Array(saltBytes);
+			return Uint8Array.from([salt[0] ?? 0, salt[1] ?? 0, salt[2] ?? 0, salt[3] ?? 0]).buffer;
+		};
+
+		mockCreate.mockImplementation(async ({ publicKey }) => ({
+			rawId: new Uint8Array([1, 2, 3]),
+			getClientExtensionResults: () => ({
+				prf: {
+					results: {
+						first: derivePrfForSalt(publicKey.extensions.prf.eval.first),
+					},
+				},
+			}),
+		}));
+		mockGet.mockImplementation(async ({ publicKey }) => ({
+			getClientExtensionResults: () => ({
+				prf: {
+					results: {
+						first: derivePrfForSalt(publicKey.extensions.prf.eval.first),
+					},
+				},
+			}),
+		}));
+
+		await Vault.setupBiometric("mypass");
+		Vault.lock();
+
+		await expect(Vault.unlockWithBiometric()).resolves.toBe(true);
+	});
+
+	it("falls back to credentials.get with prf.eval for broader browser compatibility", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue(makeCreateCredential([1, 2, 3]));
+		mockGet.mockImplementation(async ({ publicKey }) => {
+			expect(publicKey.extensions.prf.eval.first).toBeInstanceOf(Uint8Array);
+			expect(publicKey.extensions.prf.evalByCredential).toBeUndefined();
+			return makeGetCredential();
+		});
+
+		await expect(Vault.setupBiometric("mypass")).resolves.toBeUndefined();
+		expect(mockGet).toHaveBeenCalledTimes(1);
+	});
 });
 
 // ===========================================================================
