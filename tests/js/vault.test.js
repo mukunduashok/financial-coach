@@ -275,11 +275,12 @@ describe("saveAISettings / loadAISettings", () => {
 		expect(localStorageData["fincoach-vault-ai"]).toBeTruthy();
 	});
 
-	it("removes AI_SETTINGS_KEY (plaintext) from localStorage", async () => {
+	it("preserves AI_SETTINGS_KEY public settings in localStorage", async () => {
 		await Vault.setup("1234");
-		localStorageData["fincoach-ai-settings"] = JSON.stringify({ provider: "groq" });
+		localStorageData["fincoach-ai-settings"] = JSON.stringify({ provider: "groq", model: "llama" });
 		await Vault.saveAISettings({ provider: "groq", apiKey: "sk-test" });
-		expect(localStorageData["fincoach-ai-settings"]).toBeUndefined();
+		expect(JSON.parse(localStorageData["fincoach-ai-settings"]).provider).toBe("groq");
+		expect(JSON.parse(localStorageData["fincoach-ai-settings"]).model).toBe("llama");
 	});
 
 	it("loadAISettings returns the original settings object", async () => {
@@ -315,11 +316,12 @@ describe("saveGmailSettings / loadGmailSettings", () => {
 		expect(localStorageData["fincoach-vault-gmail"]).toBeTruthy();
 	});
 
-	it("removes GMAIL_SETTINGS_KEY (plaintext) from localStorage", async () => {
+	it("preserves GMAIL_SETTINGS_KEY public settings in localStorage", async () => {
 		await Vault.setup("1234");
-		localStorageData["fincoach-gmail-settings"] = JSON.stringify({ accessToken: "old" });
+		localStorageData["fincoach-gmail-settings"] = JSON.stringify({ email: "user@example.com", sub: "abc" });
 		await Vault.saveGmailSettings({ accessToken: "tok123" });
-		expect(localStorageData["fincoach-gmail-settings"]).toBeUndefined();
+		expect(JSON.parse(localStorageData["fincoach-gmail-settings"]).email).toBe("user@example.com");
+		expect(JSON.parse(localStorageData["fincoach-gmail-settings"]).sub).toBe("abc");
 	});
 
 	it("loadGmailSettings returns the original settings object", async () => {

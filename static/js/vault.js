@@ -5,8 +5,6 @@
  * in plaintext in localStorage.
  */
 import {
-  AI_SETTINGS_KEY,
-  GMAIL_SETTINGS_KEY,
   VAULT_AI_KEY,
   VAULT_BIOMETRIC_CRED_KEY,
   VAULT_BIOMETRIC_LEGACY_WRAP_KEY,
@@ -205,7 +203,6 @@ export const Vault = {
   async saveAISettings(settings) {
     const encrypted = await this.encryptJSON(settings);
     localStorage.setItem(VAULT_AI_KEY, encrypted);
-    localStorage.removeItem(AI_SETTINGS_KEY);
   },
 
   async loadAISettings() {
@@ -221,7 +218,6 @@ export const Vault = {
   async saveGmailSettings(settings) {
     const encrypted = await this.encryptJSON(settings);
     localStorage.setItem(VAULT_GMAIL_KEY, encrypted);
-    localStorage.removeItem(GMAIL_SETTINGS_KEY);
   },
 
   async loadGmailSettings() {

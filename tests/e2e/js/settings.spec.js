@@ -944,12 +944,16 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 10_000 });
 
-		// Tokens persisted only in the encrypted vault, never plaintext localStorage
+		// Tokens persisted only in the encrypted vault; plaintext localStorage may retain
+		// non-secret Gmail metadata such as email/sub.
 		const stored = await page.evaluate(() => ({
 			plaintext: localStorage.getItem("fincoach-gmail-settings"),
 			encrypted: localStorage.getItem("fincoach-vault-gmail"),
 		}));
-		expect(stored.plaintext).toBeNull();
+		expect(typeof stored.plaintext).toBe("string");
+		const plaintext = JSON.parse(stored.plaintext);
+		expect(plaintext.accessToken).toBeUndefined();
+		expect(plaintext.refreshToken).toBeUndefined();
 		expect(typeof stored.encrypted).toBe("string");
 		expect(stored.encrypted.length).toBeGreaterThan(0);
 
