@@ -6691,7 +6691,8 @@ function renderVaultUnlock() {
       <div class="form-group" style="margin-bottom:var(--space-md,1rem)">
         <label class="form-label">PIN</label>
         <input type="password" id="vault-unlock-passphrase" class="form-control"
-               placeholder="Enter PIN" autocomplete="current-password">
+               placeholder="Enter PIN" autocomplete="current-password" inputmode="numeric"
+               enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
       </div>
       <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap">
         <button class="btn btn-primary" data-action="unlock-vault">Unlock</button>
@@ -6775,7 +6776,7 @@ function doSetupBiometric() {
         <div id="biometric-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
           <label class="form-label">Confirm your current passphrase</label>
-          <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter passphrase">
+          <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter PIN" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-confirm-biometric-setup">Enable</button>
@@ -6800,7 +6801,10 @@ async function doConfirmBiometricSetup() {
     showToast("Biometric unlock enabled.", "success");
     if (window.location.hash.startsWith("#/settings")) await renderSettings();
   } catch (err) {
-    errEl.textContent = err.message || "Failed to enable biometric unlock.";
+    errEl.textContent =
+      err.message === "Biometric PRF unavailable"
+        ? "Biometric unlock is not supported in this browser/app yet. Please use your PIN."
+        : err.message || "Failed to enable biometric unlock.";
     errEl.style.display = "";
   }
 }
@@ -6831,11 +6835,11 @@ function showVaultSetupModal() {
         <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
           <label class="form-label">PIN <span class="text-muted">(min 4 digits/characters)</span></label>
-          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password">
+          <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="form-group">
           <label class="form-label">Confirm PIN</label>
-          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat PIN" autocomplete="new-password">
+          <input type="password" id="vault-setup-confirm" class="form-control" placeholder="Repeat PIN" autocomplete="new-password" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-setup-vault">Set PIN</button>
@@ -6882,15 +6886,15 @@ function showChangePassphraseModal() {
         <div id="vault-change-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
           <label class="form-label">Current PIN</label>
-          <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password">
+          <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="form-group">
           <label class="form-label">New PIN <span class="text-muted">(min 4 digits/characters)</span></label>
-          <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password">
+          <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password" inputmode="numeric" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="form-group">
           <label class="form-label">Confirm new PIN</label>
-          <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password">
+          <input type="password" id="vault-change-confirm" class="form-control" autocomplete="new-password" inputmode="numeric" enterkeyhint="done" autocapitalize="off" autocorrect="off" spellcheck="false">
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" data-action="do-change-passphrase">Update PIN</button>

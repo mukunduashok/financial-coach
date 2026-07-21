@@ -26,6 +26,7 @@ async function installBiometricMocks(page) {
 			configurable: true,
 			value: {
 				isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+				getClientCapabilities: async () => ({ extensions: ["prf"] }),
 			},
 		});
 
@@ -45,6 +46,25 @@ async function installBiometricMocks(page) {
 				prf: { results: { first: mockPrf } },
 			}),
 		});
+	};
+
+	await page.addInitScript(install);
+	await page.evaluate(install);
+}
+
+async function installNoPrfBiometricSupport(page) {
+	const install = () => {
+		Object.defineProperty(window, "PublicKeyCredential", {
+			configurable: true,
+			value: {
+				isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+				getClientCapabilities: async () => ({ extensions: [] }),
+			},
+		});
+
+		if (!navigator.credentials) {
+			Object.defineProperty(navigator, "credentials", { configurable: true, value: {} });
+		}
 	};
 
 	await page.addInitScript(install);
@@ -71,6 +91,8 @@ test.describe("Vault settings card", () => {
 		await page.click('[data-action="vault-setup"]');
 		// Modal should appear
 		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
+		await expect(page.locator("#vault-setup-passphrase")).toHaveAttribute("inputmode", "numeric");
+		await expect(page.locator("#vault-setup-confirm")).toHaveAttribute("inputmode", "numeric");
 		// Short PIN — must be at least 4 characters
 		await page.fill("#vault-setup-passphrase", "abc");
 		await page.fill("#vault-setup-confirm", "abc");
@@ -148,6 +170,24 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await expect(page.locator("text=Biometric unlock active")).toBeVisible({ timeout: 8_000 });
 	});
+
+	test("settings hides biometric enable action when PRF support is unavailable", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await installNoPrfBiometricSupport(page);
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.click('[data-action="vault-setup"]');
+		await page.fill("#vault-setup-passphrase", "1234");
+		await page.fill("#vault-setup-confirm", "1234");
+		await page.click('[data-action="do-setup-vault"]');
+		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
+			timeout: 15_000,
+		});
+		await page.goto("/#/");
+		await page.goto("/#/settings");
+		await expect(page.locator("text=Not supported on this device")).toBeVisible({ timeout: 8_000 });
+		await expect(page.locator('[data-action="enable-biometric"]')).toHaveCount(0);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -165,6 +205,7 @@ test.describe("Vault unlock screen", () => {
 		const page = pwaPage;
 		await setupAndLockVault(page, "mysecurepass");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+		await expect(page.locator("#vault-unlock-passphrase")).toHaveAttribute("inputmode", "numeric");
 		// Enter wrong passphrase
 		await page.fill("#vault-unlock-passphrase", "wrongpassword");
 		await page.click('[data-action="unlock-vault"]');

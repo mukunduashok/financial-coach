@@ -62,6 +62,15 @@ function _getBiometricPrfResult(credential) {
   return credential?.getClientExtensionResults?.()?.prf?.results?.first ?? null;
 }
 
+async function _hasBiometricPrfSupport() {
+  if (typeof globalThis.PublicKeyCredential?.getClientCapabilities !== "function") return false;
+  const caps = await globalThis.PublicKeyCredential.getClientCapabilities("public-key");
+  const extensions = caps?.extensions;
+  if (Array.isArray(extensions)) return extensions.includes("prf");
+  if (extensions && typeof extensions === "object") return Boolean(extensions.prf);
+  return false;
+}
+
 async function _deriveKey(passphrase, salt) {
   const keyMaterial = await globalThis.crypto.subtle.importKey(
     "raw",
@@ -255,7 +264,10 @@ export const Vault = {
   async isBiometricAvailable() {
     if (!globalThis.navigator?.credentials || !globalThis.PublicKeyCredential) return false;
     try {
-      return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      const hasAuthenticator =
+        await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      if (!hasAuthenticator) return false;
+      return await _hasBiometricPrfSupport();
     } catch {
       return false;
     }

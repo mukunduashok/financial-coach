@@ -2960,6 +2960,77 @@ describe("Vault — PIN minimum 4 characters", () => {
 });
 
 // ===========================================================================
+// Vault biometric availability and mobile PIN keyboard hints
+// ===========================================================================
+describe("Vault biometric availability and PIN inputs", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(() => {
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    mockAPI.isBiometricEnabled.mockReturnValue(false);
+    mockAPI.isBiometricAvailable.mockResolvedValue(false);
+    localStorage.setItem("fincoach-vault-salt", "configured");
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    localStorage.removeItem("fincoach-vault-salt");
+    document.getElementById("vault-setup-modal")?.remove();
+    document.getElementById("vault-unlock-screen")?.remove();
+    document.getElementById("vault-change-modal")?.remove();
+    vi.restoreAllMocks();
+  });
+
+  it("shows biometric enable button only when PRF-backed biometric unlock is supported", async () => {
+    mockAPI.isBiometricAvailable.mockResolvedValue(true);
+
+    const screen = await renderSettings();
+
+    expect(screen.querySelector('[data-action="enable-biometric"]')).not.toBeNull();
+    expect(screen.textContent).not.toContain("Not supported on this device");
+  });
+
+  it("shows unsupported copy and hides the enable button when PRF-backed biometric unlock is unavailable", async () => {
+    mockAPI.isBiometricAvailable.mockResolvedValue(false);
+
+    const screen = await renderSettings();
+
+    expect(screen.querySelector('[data-action="enable-biometric"]')).toBeNull();
+    expect(screen.textContent).toContain("Not supported on this device");
+  });
+
+  it("vault setup and unlock PIN inputs request a numeric mobile keyboard", async () => {
+    const screen = await renderSettings();
+    screen.querySelector('[data-action="vault-change-passphrase"]');
+
+    const setupBtn = document.createElement("button");
+    setupBtn.setAttribute("data-action", "vault-setup");
+    document.body.appendChild(setupBtn);
+    setupBtn.click();
+    document.body.removeChild(setupBtn);
+
+    const setupPin = document.getElementById("vault-setup-passphrase");
+    const setupConfirm = document.getElementById("vault-setup-confirm");
+    expect(setupPin?.getAttribute("inputmode")).toBe("numeric");
+    expect(setupPin?.getAttribute("enterkeyhint")).toBe("next");
+    expect(setupConfirm?.getAttribute("inputmode")).toBe("numeric");
+    expect(setupConfirm?.getAttribute("enterkeyhint")).toBe("done");
+
+    document.getElementById("vault-setup-modal")?.remove();
+    document.dispatchEvent(new Event("vault-locked"));
+
+    const unlockPin = document.getElementById("vault-unlock-passphrase");
+    expect(unlockPin?.getAttribute("inputmode")).toBe("numeric");
+    expect(unlockPin?.getAttribute("enterkeyhint")).toBe("done");
+  });
+});
+
+// ===========================================================================
 // Gmail connect — vault gating and auto-continue
 // ===========================================================================
 describe("Gmail connect vault gating", () => {

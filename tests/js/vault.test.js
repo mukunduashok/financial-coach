@@ -44,6 +44,7 @@ const mockGet = vi.fn();
 globalThis.navigator = { credentials: { create: mockCreate, get: mockGet } };
 globalThis.PublicKeyCredential = {
 	isUserVerifyingPlatformAuthenticatorAvailable: vi.fn().mockResolvedValue(true),
+	getClientCapabilities: vi.fn().mockResolvedValue({ extensions: ["prf"] }),
 };
 
 const { Vault } = await import("../../static/js/vault.js");
@@ -56,6 +57,8 @@ function resetVault() {
 	Vault._key = null;
 	mockCreate.mockReset();
 	mockGet.mockReset();
+	globalThis.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable.mockResolvedValue(true);
+	globalThis.PublicKeyCredential.getClientCapabilities.mockResolvedValue({ extensions: ["prf"] });
 }
 
 function makeCreateCredential(rawId = [1, 2, 3], prfBytes = null) {
@@ -390,10 +393,11 @@ describe("changePassphrase()", () => {
 // 11. isBiometricAvailable()
 // ===========================================================================
 describe("isBiometricAvailable()", () => {
-	it("returns true when platform authenticator is available", async () => {
+	it("returns true when platform authenticator and PRF support are available", async () => {
 		globalThis.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable.mockResolvedValue(
 			true,
 		);
+		globalThis.PublicKeyCredential.getClientCapabilities.mockResolvedValue({ extensions: ["prf"] });
 		const result = await Vault.isBiometricAvailable();
 		expect(result).toBe(true);
 	});
@@ -404,6 +408,23 @@ describe("isBiometricAvailable()", () => {
 		);
 		const result = await Vault.isBiometricAvailable();
 		expect(result).toBe(false);
+	});
+
+	it("returns false when PRF support is not advertised", async () => {
+		globalThis.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable.mockResolvedValue(
+			true,
+		);
+		globalThis.PublicKeyCredential.getClientCapabilities.mockResolvedValue({ extensions: [] });
+		const result = await Vault.isBiometricAvailable();
+		expect(result).toBe(false);
+	});
+
+	it("returns false when getClientCapabilities is unavailable", async () => {
+		const saved = globalThis.PublicKeyCredential.getClientCapabilities;
+		delete globalThis.PublicKeyCredential.getClientCapabilities;
+		const result = await Vault.isBiometricAvailable();
+		expect(result).toBe(false);
+		globalThis.PublicKeyCredential.getClientCapabilities = saved;
 	});
 
 	it("returns false when navigator.credentials is missing", async () => {
