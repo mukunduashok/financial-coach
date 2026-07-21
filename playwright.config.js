@@ -5,6 +5,7 @@ export default defineConfig({
   testDir: "tests/e2e/js",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  fullyParallel: true,
   retries: 1,
   workers: process.env.CI ? 2 : 4,
   use: {
@@ -13,7 +14,7 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: "npx serve static -l 8082 --cors --no-clipboard",
+    command: "python3 -m http.server 8082 --bind 127.0.0.1 --directory static",
     port: 8082,
     reuseExistingServer: !process.env.CI,
   },

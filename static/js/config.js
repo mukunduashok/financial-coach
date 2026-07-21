@@ -30,6 +30,7 @@ export const GMAIL_OAUTH_PENDING_STATE_KEY = "fincoach-gmail-oauth-pending-state
 export const GMAIL_OAUTH_PENDING_RESULT_KEY = "fincoach-gmail-oauth-pending-result";
 export const GMAIL_OAUTH_STATE_TTL_MS = 300_000; // 5 minutes
 export const AI_SETTINGS_KEY = "fincoach-ai-settings";
+export const AI_EXTERNAL_CONSENT_KEY = "fincoach-ai-external-consent";
 
 export const VAULT_SALT_KEY = "fincoach-vault-salt";
 export const VAULT_SENTINEL_KEY = "fincoach-vault-sentinel";

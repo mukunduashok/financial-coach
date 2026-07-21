@@ -186,6 +186,22 @@ describe("maskPII", () => {
     expect(result).toContain("Phone: ");
     expect(result).toContain("Email: ");
   });
+
+  it("masks UPI handles", () => {
+    expect(maskPII("paytm-blinkit@ptybl")).toBe("pa***@[UPI]");
+  });
+
+  it("masks labelled account identifiers", () => {
+    expect(maskPII("Account No: 123456789012")).toBe("Account No: [REDACTED]");
+  });
+
+  it("masks labelled UPI references", () => {
+    expect(maskPII("UPI Ref: 1234ABCD5678")).toBe("UPI Ref: [REDACTED]");
+  });
+
+  it("masks labelled bank or source names", () => {
+    expect(maskPII("Bank/Source: HDFC Savings")).toBe("Bank/Source: HD** Sa*****");
+  });
 });
 
 // ---------------------------------------------------------------------------

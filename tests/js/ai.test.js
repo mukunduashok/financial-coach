@@ -40,12 +40,14 @@ const mockDB = {
 // Mock the db.js module
 vi.mock("../../static/js/db.js", () => ({ DB: mockDB }));
 
-// Mock vault.js — simulate vault not configured
+// Mock vault.js — default to configured + unlocked so most AI tests can keep
+// using API keys without exercising the vault gate explicitly.
 vi.mock("../../static/js/vault.js", () => ({
   Vault: {
-    isConfigured: vi.fn(() => false),
-    isUnlocked: vi.fn(() => false),
+    isConfigured: vi.fn(() => true),
+    isUnlocked: vi.fn(() => true),
     saveAISettings: vi.fn(),
+    clearAISettings: vi.fn(),
   },
 }));
 
@@ -54,6 +56,7 @@ globalThis.fetch = vi.fn();
 
 // Now import AI (after mocks are set up)
 const { AI, AI_PROVIDERS } = await import("../../static/js/ai.js");
+const { Vault } = await import("../../static/js/vault.js");
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +64,11 @@ const { AI, AI_PROVIDERS } = await import("../../static/js/ai.js");
 function clearLocalStore() {
   for (const k of Object.keys(localStore)) delete localStore[k];
   AI.clearDecrypted();
+  Vault.isConfigured.mockReturnValue(true);
+  Vault.isUnlocked.mockReturnValue(true);
+  Vault.saveAISettings.mockReset();
+  Vault.saveAISettings.mockResolvedValue(undefined);
+  Vault.clearAISettings.mockReset();
 }
 
 function mockFetchSuccess(content = "Hello! How can I help?") {
@@ -131,8 +139,22 @@ describe("Settings Management", () => {
     });
   });
 
-  it("saves and retrieves settings", () => {
-    AI.saveSettings({
+  it("tracks external AI consent per provider", () => {
+    expect(AI.hasExternalConsent("groq")).toBe(false);
+    AI.grantExternalConsent("groq", "test");
+    expect(AI.hasExternalConsent("groq")).toBe(true);
+    expect(AI.hasExternalConsent("openai")).toBe(false);
+    AI.revokeExternalConsent();
+    expect(AI.hasExternalConsent("groq")).toBe(false);
+  });
+
+  it("does not require consent for Ollama", () => {
+    expect(AI.requiresExternalConsent("ollama")).toBe(false);
+    expect(AI.hasExternalConsent("ollama")).toBe(true);
+  });
+
+  it("stores public settings locally and secret settings in the vault", async () => {
+    await AI.saveSettings({
       provider: "groq",
       apiKey: "sk-test",
       model: "llama-3.3-70b-versatile",
@@ -140,6 +162,7 @@ describe("Settings Management", () => {
       azureDeploymentName: "",
       azureApiVersion: "",
     });
+
     const s = AI.getSettings();
     expect(s.provider).toBe("groq");
     expect(s.apiKey).toBe("sk-test");
@@ -147,10 +170,75 @@ describe("Settings Management", () => {
     expect(s.azureResourceName).toBe("");
     expect(s.azureDeploymentName).toBe("");
     expect(s.azureApiVersion).toBe("");
+    expect(JSON.parse(localStore["fincoach-ai-settings"])).toEqual({
+      provider: "groq",
+      model: "llama-3.3-70b-versatile",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
+    expect(Vault.saveAISettings).toHaveBeenCalledWith({ apiKey: "sk-test" });
   });
 
-  it("saves and retrieves azure-specific settings", () => {
-    AI.saveSettings({
+  it("saves public settings but blocks plaintext API key storage when the vault is unavailable", async () => {
+    Vault.isConfigured.mockReturnValue(false);
+    Vault.isUnlocked.mockReturnValue(false);
+
+    const result = await AI.saveSettings({
+      provider: "groq",
+      apiKey: "sk-test",
+      model: "llama-3.3-70b-versatile",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({ ok: false, publicSaved: true, secretSaved: false }),
+    );
+    expect(JSON.parse(localStore["fincoach-ai-settings"])).toEqual({
+      provider: "groq",
+      model: "llama-3.3-70b-versatile",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
+    expect(AI.getSettings().apiKey).toBe("");
+    expect(Vault.saveAISettings).not.toHaveBeenCalled();
+  });
+
+  it("saves public settings but requires unlock before saving an API key when the vault is locked", async () => {
+    Vault.isConfigured.mockReturnValue(true);
+    Vault.isUnlocked.mockReturnValue(false);
+
+    const result = await AI.saveSettings({
+      provider: "openai",
+      apiKey: "sk-locked",
+      model: "gpt-4o",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: false,
+        publicSaved: true,
+        secretSaved: false,
+        vaultRequired: true,
+        error: "Unlock your PIN before saving an AI API key.",
+      }),
+    );
+    expect(JSON.parse(localStore["fincoach-ai-settings"])).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
+    expect(AI.getSettings().apiKey).toBe("");
+    expect(Vault.saveAISettings).not.toHaveBeenCalled();
+  });
+
+  it("saves and retrieves azure-specific settings", async () => {
+    await AI.saveSettings({
       provider: "azure",
       apiKey: "my-azure-key",
       model: "",
@@ -194,6 +282,27 @@ describe("Settings Management", () => {
     expect(s.provider).toBe("openai");
     expect(s.apiKey).toBe("");
     expect(s.model).toBe("");
+  });
+
+  it("migrates legacy plaintext API keys into the vault and scrubs localStorage", async () => {
+    localStore["fincoach-ai-settings"] = JSON.stringify({
+      provider: "openai",
+      apiKey: "legacy-key",
+      model: "gpt-4o",
+    });
+
+    await AI.hydrateVaultSettings(null);
+
+    expect(Vault.saveAISettings).toHaveBeenCalledWith({ apiKey: "legacy-key" });
+    expect(JSON.parse(localStore["fincoach-ai-settings"])).toEqual({
+      provider: "openai",
+      model: "gpt-4o",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
+    expect(AI.getSettings().apiKey).toBe("legacy-key");
   });
 });
 
@@ -366,7 +475,7 @@ describe("Context Building", () => {
   it("includes financial snapshot in output", async () => {
     const ctx = await AI._buildContext("How am I doing?");
     expect(ctx).toContain("FINANCIAL SNAPSHOT");
-    expect(ctx).toContain("Savings");
+    expect(ctx).toContain("Account 1");
     expect(ctx).toContain("50,000");
   });
 
@@ -378,7 +487,7 @@ describe("Context Building", () => {
 
   it("includes goals summary", async () => {
     const ctx = await AI._buildContext("Goal progress");
-    expect(ctx).toContain("Emergency Fund");
+    expect(ctx).toContain("Goal 1");
     expect(ctx).toContain("50.0% complete");
   });
 
@@ -481,6 +590,7 @@ describe("Chat — Happy Path", () => {
     vi.clearAllMocks();
     clearLocalStore();
     AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     mockDB.getAccounts.mockResolvedValue([]);
     mockDB.getTransactions.mockResolvedValue([]);
     mockDB.getGoals.mockResolvedValue([]);
@@ -557,6 +667,24 @@ describe("Chat — Happy Path", () => {
     expect(historyContent).not.toContain("9876543210");
     expect(historyContent).toContain("*******210");
   });
+
+  it("falls back to heuristic mode until external consent is granted", async () => {
+    AI.revokeExternalConsent();
+    const result = await AI.chat("Hello");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.model_used).toBe("heuristic");
+    expect(result.consent_required).toBe(true);
+    expect(result.response).toContain("External AI is configured but not yet enabled");
+  });
+
+  it("masks the current user message before sending to the provider", async () => {
+    AI.grantExternalConsent("groq", "test");
+    await AI.chat("My UPI is paytm-blinkit@ptybl");
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    const currentMessage = body.messages[body.messages.length - 1].content;
+    expect(currentMessage).not.toContain("paytm-blinkit@ptybl");
+    expect(currentMessage).toContain("pa***@[UPI]");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -576,6 +704,7 @@ describe("Provider Switching", () => {
 
   it("uses OpenAI endpoint when configured", async () => {
     AI.saveSettings({ provider: "openai", apiKey: "sk-oai", model: "gpt-4o-mini" });
+    AI.grantExternalConsent("openai", "test");
     await AI.chat("Test");
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "https://api.openai.com/v1/chat/completions",
@@ -593,6 +722,7 @@ describe("Provider Switching", () => {
 
   it("uses Gemini endpoint when configured", async () => {
     AI.saveSettings({ provider: "gemini", apiKey: "gemini-key", model: "gemini-2.0-flash" });
+    AI.grantExternalConsent("gemini", "test");
     await AI.chat("Test");
     const fetchCall = globalThis.fetch.mock.calls[0];
     expect(fetchCall[0]).toContain("googleapis.com");
@@ -610,6 +740,7 @@ describe("Provider Switching", () => {
       azureDeploymentName: "gpt-4o",
       azureApiVersion: "2024-06-01",
     });
+    AI.grantExternalConsent("azure", "test");
     await AI.chat("Test");
     const fetchCall = globalThis.fetch.mock.calls[0];
     expect(fetchCall[1].headers["api-key"]).toBe("azure-key");
@@ -625,6 +756,7 @@ describe("Provider Switching", () => {
       azureDeploymentName: "gpt-4o",
       azureApiVersion: "2024-06-01",
     });
+    AI.grantExternalConsent("azure", "test");
     await AI.chat("Test");
     const fetchUrl = globalThis.fetch.mock.calls[0][0];
     expect(fetchUrl).toContain("my-resource.openai.azure.com");
@@ -640,6 +772,7 @@ describe("Provider Switching", () => {
       azureDeploymentName: "gpt-4o",
       azureApiVersion: "2024-06-01",
     });
+    AI.grantExternalConsent("azure", "test");
     await AI.chat("Test");
     const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
     expect(body.model).toBeUndefined();
@@ -654,6 +787,7 @@ describe("Provider Switching", () => {
       azureDeploymentName: "gpt-4o",
       azureApiVersion: "",
     });
+    AI.grantExternalConsent("azure", "test");
     const result = await AI.chat("Test");
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
@@ -669,6 +803,7 @@ describe("Provider Switching", () => {
       azureDeploymentName: "",
       azureApiVersion: "",
     });
+    AI.grantExternalConsent("azure", "test");
     const result = await AI.chat("Test");
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
@@ -697,7 +832,8 @@ describe("Error Handling", () => {
   });
 
   it("handles 401 unauthorized", async () => {
-    AI.saveSettings({ provider: "groq", apiKey: "bad-key", model: "llama-3.3-70b-versatile" });
+    AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     mockFetchError(401, { error: { message: "Invalid API key" } });
     const result = await AI.chat("Hello");
     expect(result.response).toContain("Invalid API key");
@@ -705,6 +841,7 @@ describe("Error Handling", () => {
 
   it("handles 429 rate limit", async () => {
     AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     mockFetchError(429, { error: { message: "Rate limit exceeded" } });
     const result = await AI.chat("Hello");
     expect(result.response).toContain("Rate limit exceeded");
@@ -712,6 +849,7 @@ describe("Error Handling", () => {
 
   it("handles network failure", async () => {
     AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     globalThis.fetch.mockRejectedValue(new Error("Network unreachable"));
     const result = await AI.chat("Hello");
     expect(result.response).toContain("Network error");
@@ -719,7 +857,8 @@ describe("Error Handling", () => {
   });
 
   it("handles unknown provider", async () => {
-    AI.saveSettings({ provider: "unknown", apiKey: "x", model: "m" });
+    AI.saveSettings({ provider: "unknown", apiKey: "mystery-key", model: "m" });
+    AI.grantExternalConsent("unknown", "test");
     const result = await AI.chat("Hello");
     expect(result.response).toContain("Unknown AI provider");
   });
@@ -937,6 +1076,7 @@ describe("Chat — Heuristic Mode (no provider)", () => {
 
   it("when provider IS configured, does NOT return model_used: heuristic", async () => {
     AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     mockDB.getChatHistory.mockResolvedValue({ chat_id: "test", history: [] });
     mockFetchSuccess("Here is my advice...");
     const result = await AI.chat("How am I doing?");
@@ -947,7 +1087,6 @@ describe("Chat — Heuristic Mode (no provider)", () => {
 // ---------------------------------------------------------------------------
 // 12. Vault / _decrypted cache
 // ---------------------------------------------------------------------------
-import { Vault } from "../../static/js/vault.js";
 
 describe("Vault / _decrypted cache", () => {
   beforeEach(() => {
@@ -972,7 +1111,7 @@ describe("Vault / _decrypted cache", () => {
     AI.clearDecrypted();
     const s = AI.getSettings();
     expect(s.provider).toBe("openai");
-    expect(s.apiKey).toBe("from-ls");
+    expect(s.apiKey).toBe("");
   });
 
   it("saveSettings() returns a Promise (is async)", () => {
@@ -980,24 +1119,29 @@ describe("Vault / _decrypted cache", () => {
     expect(result).toBeInstanceOf(Promise);
   });
 
-  it("saveSettings() when vault not configured → writes to localStorage", async () => {
+  it("saveSettings() when vault not configured → keeps only public settings in localStorage", async () => {
     Vault.isConfigured.mockReturnValue(false);
     await AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
     const raw = localStore["fincoach-ai-settings"];
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw);
     expect(parsed.provider).toBe("groq");
-    expect(parsed.apiKey).toBe("sk-test");
+    expect(parsed.apiKey).toBeUndefined();
   });
 
   it("saveSettings() when vault is configured+unlocked → calls Vault.saveAISettings()", async () => {
     Vault.isConfigured.mockReturnValue(true);
     Vault.isUnlocked.mockReturnValue(true);
     Vault.saveAISettings.mockResolvedValue(undefined);
-    await AI.saveSettings({ provider: "groq", apiKey: "sk-vault" });
-    expect(Vault.saveAISettings).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "groq", apiKey: "sk-vault" }),
-    );
-    expect(localStore["fincoach-ai-settings"]).toBeUndefined();
+    await AI.saveSettings({ provider: "groq", apiKey: "sk-test" });
+    expect(Vault.saveAISettings).toHaveBeenCalledWith({ apiKey: "sk-test" });
+    expect(JSON.parse(localStore["fincoach-ai-settings"])).toEqual({
+      provider: "groq",
+      model: "",
+      azureResourceName: "",
+      azureDeploymentName: "",
+      azureApiVersion: "",
+      ollamaBaseUrl: "",
+    });
   });
 });

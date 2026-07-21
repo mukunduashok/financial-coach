@@ -58,10 +58,19 @@ function resetVault() {
 	mockGet.mockReset();
 }
 
-function makeCreateCredential(rawId = [1, 2, 3]) {
+function makeCreateCredential(rawId = [1, 2, 3], prfBytes = null) {
 	return {
 		rawId: new Uint8Array(rawId),
-		getClientExtensionResults: () => ({}),
+		getClientExtensionResults: () =>
+			prfBytes
+				? {
+					prf: {
+						results: {
+							first: new Uint8Array(prfBytes).buffer,
+						},
+					},
+				}
+				: {},
 	};
 }
 
@@ -234,6 +243,14 @@ describe("saveAISettings / loadAISettings", () => {
 		const loaded = await Vault.loadAISettings();
 		expect(loaded).toBeNull();
 	});
+
+	it("clearAISettings removes the encrypted AI blob only", async () => {
+		await Vault.setup("mypassphrase");
+		await Vault.saveAISettings({ apiKey: "sk-test" });
+		Vault.clearAISettings();
+		expect(localStorageData["fincoach-vault-ai"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-salt"]).toBeTruthy();
+	});
 });
 
 // ===========================================================================
@@ -265,6 +282,14 @@ describe("saveGmailSettings / loadGmailSettings", () => {
 		await Vault.setup("mypassphrase");
 		const loaded = await Vault.loadGmailSettings();
 		expect(loaded).toBeNull();
+	});
+
+	it("clearGmailSettings removes the encrypted Gmail blob only", async () => {
+		await Vault.setup("mypassphrase");
+		await Vault.saveGmailSettings({ accessToken: "tok123" });
+		Vault.clearGmailSettings();
+		expect(localStorageData["fincoach-vault-gmail"]).toBeUndefined();
+		expect(localStorageData["fincoach-vault-salt"]).toBeTruthy();
 	});
 });
 
@@ -437,6 +462,19 @@ describe("setupBiometric()", () => {
 		expect(localStorageData["fincoach-vault-biometric-prf-salt"]).toBeTruthy();
 		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeTruthy();
 		expect(localStorageData["fincoach-vault-biometric-wrap"]).toBeUndefined();
+	});
+
+	it("uses PRF output returned by credential creation without requiring a second biometric prompt", async () => {
+		await Vault.setup("mypass");
+		mockCreate.mockResolvedValue(makeCreateCredential([1, 2, 3], [4, 5, 6, 7]));
+		mockGet.mockRejectedValue(new Error("should not be called"));
+
+		await Vault.setupBiometric("mypass");
+
+		expect(localStorageData["fincoach-vault-biometric-cred"]).toBeTruthy();
+		expect(localStorageData["fincoach-vault-biometric-prf-salt"]).toBeTruthy();
+		expect(localStorageData["fincoach-vault-biometric-wrapped"]).toBeTruthy();
+		expect(mockGet).not.toHaveBeenCalled();
 	});
 });
 

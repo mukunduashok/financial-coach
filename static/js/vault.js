@@ -192,6 +192,10 @@ export const Vault = {
     return this.decryptJSON(blob);
   },
 
+  clearAISettings() {
+    localStorage.removeItem(VAULT_AI_KEY);
+  },
+
   async saveGmailSettings(settings) {
     const encrypted = await this.encryptJSON(settings);
     localStorage.setItem(VAULT_GMAIL_KEY, encrypted);
@@ -202,6 +206,10 @@ export const Vault = {
     const blob = localStorage.getItem(VAULT_GMAIL_KEY);
     if (!blob) return null;
     return this.decryptJSON(blob);
+  },
+
+  clearGmailSettings() {
+    localStorage.removeItem(VAULT_GMAIL_KEY);
   },
 
   clearCredentials() {
@@ -332,16 +340,17 @@ export const Vault = {
       },
     });
 
-    // Step 3: store credential ID
+    // Step 3: derive authenticator-bound wrap key using WebAuthn PRF.
+    // Prefer the PRF result returned by credential creation so browsers that
+    // complete registration but do not immediately support a second get()
+    // prompt in the same flow still enable biometric unlock successfully.
     const credIdBytes = _toUint8Array(credential.rawId);
-    localStorage.setItem(VAULT_BIOMETRIC_CRED_KEY, _toBase64(credIdBytes));
-
-    // Step 4: derive authenticator-bound wrap key using WebAuthn PRF
     const prfSalt = globalThis.crypto.getRandomValues(new Uint8Array(BIOMETRIC_PRF_SALT_LENGTH));
-    const prfOutput = await this._getBiometricPrfOutput(credIdBytes, prfSalt);
+    const createPrfOutput = _getBiometricPrfResult(credential);
+    const prfOutput = createPrfOutput || (await this._getBiometricPrfOutput(credIdBytes, prfSalt));
     const wrapKey = await _importBiometricWrapKey(prfOutput, ["encrypt"]);
 
-    // Step 5: encrypt passphrase with authenticator-derived wrap key
+    // Step 4: encrypt passphrase with authenticator-derived wrap key
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(IV_LENGTH));
     const ciphertext = await globalThis.crypto.subtle.encrypt(
       { name: "AES-GCM", iv },
@@ -352,7 +361,9 @@ export const Vault = {
     combined.set(iv, 0);
     combined.set(new Uint8Array(ciphertext), IV_LENGTH);
 
-    // Step 6: store PRF salt and wrapped passphrase (legacy wrap-key storage is no longer used)
+    // Step 5: store credential material only after the full flow succeeds so
+    // partial failures cannot leave behind a half-configured biometric state.
+    localStorage.setItem(VAULT_BIOMETRIC_CRED_KEY, _toBase64(credIdBytes));
     localStorage.removeItem(VAULT_BIOMETRIC_LEGACY_WRAP_KEY);
     localStorage.setItem(VAULT_BIOMETRIC_PRF_SALT_KEY, _toBase64(prfSalt));
     localStorage.setItem(VAULT_BIOMETRIC_WRAPPED_KEY, _toBase64(combined));

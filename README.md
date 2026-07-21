@@ -93,6 +93,22 @@ npx wrangler deploy
 
 Note the deployed Worker URL — you will need it in the next step.
 
+Before going live, choose the Cloudflare security path that matches your plan:
+
+- Paid plan path:
+  - add route-specific Cloudflare dashboard rate limits / WAF rules for `/auth/url`, `/auth/refresh`, and repeated `/auth/callback` failures
+  - keep `/auth/refresh` and callback-failure thresholds stricter than `/auth/url`
+  - add alerts or log monitors for repeated `origin_not_allowed`, `rate_limited`, and callback-state failures emitted by the Worker
+- Free plan path:
+  - rely on the Worker's built-in protection layer: strict `ALLOWED_ORIGIN` checks, request body caps, generic safe OAuth errors, and Durable Object-backed throttling
+  - optionally add simple custom method-block rules if your zone dashboard exposes them: only `GET` for `/auth/url` and `/auth/callback`, only `POST` for `/auth/refresh`
+  - monitor Worker logs for repeated `origin_not_allowed`, `rate_limited`, and callback-state failures
+
+For both paths:
+- keep `invocation_logs` disabled for the Worker and restrict access / retention for any other logs so OAuth callback query data is not broadly retained
+
+The current implementation already enforces origin checks, request body caps, and Durable Object-backed throttling in the Worker itself. Paid-plan dashboard rules are still useful as extra defense in depth, but Free-tier deployments can rely on the built-in Durable Object limiter.
+
 ### 3. Point the app at your Worker
 
 Copy `.env.example` to `.env` and set `GMAIL_PROXY_URL` to your deployed Worker URL:
@@ -129,7 +145,7 @@ AI settings are configured in the app under **Settings → AI Provider**. No con
 | **Azure OpenAI** | Paid | Azure subscription required |
 | **Ollama** (local) | Free | Install [Ollama](https://ollama.com), run `ollama pull llama3.1:8b` |
 
-Enter the API key directly in the Settings screen. Keys are stored in `localStorage` on your device only.
+Set up the in-app Credential Vault first, then enter the API key in the Settings screen. Keys are stored only in the encrypted vault on your device.
 
 ## Gmail Sync Setup
 
@@ -148,7 +164,10 @@ Gmail sync requires a Cloudflare Worker to handle the OAuth token exchange secur
    wrangler secret put ALLOWED_ORIGIN     # your Pages domain, e.g. https://finance.example.com
    wrangler deploy
    ```
-6. In the app, go to **Settings** and enter the worker URL, then go to **Sync** to connect your Gmail account.
+6. Configure Cloudflare abuse controls for the public OAuth endpoints:
+   - Paid plan: add dashboard rate limiting / WAF rules plus alerts for repeated blocked-origin or callback-state failures.
+   - Free plan: rely on the built-in Durable Object limiter, keep `ALLOWED_ORIGIN` strict, optionally add simple method-block custom rules, and monitor Worker logs for repeated blocked-origin or callback-state failures.
+7. In the app, set up the **Credential Vault** in **Settings** first, then enter the worker URL and go to **Sync** to connect your Gmail account.
 
 ## Google Drive Backup
 
@@ -208,9 +227,12 @@ See [AGENTS.md](./AGENTS.md) for development workflow and coding standards.
 
 - All financial data is stored locally in your browser (IndexedDB / SQLite WASM)
 - No telemetry, no analytics, no server — this is a purely client-side app
-- AI queries are sent only to your configured provider; choose Ollama for fully offline operation
-- Gmail OAuth tokens are stored locally and never sent anywhere except Google's OAuth servers and the Cloudflare Worker you control
+- AI queries are sent only to your configured provider after you explicitly consent to external processing; choose Ollama for fully offline operation
+- Gmail OAuth tokens and AI API keys are stored only in the encrypted in-browser Credential Vault and never sent anywhere except Google's OAuth servers, the Cloudflare Worker you control, and the AI provider you explicitly configure
+- External AI prompts are sent directly from your browser and include only masked financial context relevant to the current feature (chat or Gmail extraction); do not paste secrets or personal data you do not want shared
 - Google Drive backups are AES-GCM encrypted before upload — the key is derived from your Gmail address via PBKDF2 and never leaves your device
+
+If you lose a device or forget your vault PIN, rotate your AI API keys, revoke Google access from https://myaccount.google.com/permissions, reconnect Gmail, and restore your latest encrypted Drive backup after setting up a new vault.
 
 ## License
 

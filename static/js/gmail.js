@@ -118,6 +118,17 @@ const AI_PROVIDERS = {
   },
 };
 
+const GMAIL_PUBLIC_DEFAULTS = {
+  email: "",
+  sub: "",
+};
+
+const GMAIL_SECRET_DEFAULTS = {
+  accessToken: "",
+  refreshToken: "",
+  tokenExpiry: null,
+};
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -148,34 +159,159 @@ export const Gmail = {
     this._decrypted = null;
   },
 
-  getSettings() {
-    if (this._decrypted) return { ...this._decrypted };
+  _readStoredSettings() {
     try {
       const raw = localStorage.getItem(GMAIL_SETTINGS_KEY);
-      if (raw) return JSON.parse(raw);
+      return raw ? JSON.parse(raw) : {};
     } catch {
-      // ignore corrupt data
+      return {};
     }
-    return {};
+  },
+
+  _normalizePublicSettings(settings = {}) {
+    return {
+      email: settings.email || "",
+      sub: settings.sub || "",
+    };
+  },
+
+  _normalizeSecretSettings(settings = {}) {
+    return {
+      accessToken: settings.accessToken || "",
+      refreshToken: settings.refreshToken || "",
+      tokenExpiry: settings.tokenExpiry ?? null,
+    };
+  },
+
+  _hasSecretSettings(settings = {}) {
+    return !!(settings.accessToken || settings.refreshToken || settings.tokenExpiry);
+  },
+
+  _mergePublicSettings(current, settings = {}) {
+    const has = (key) => Object.hasOwn(settings, key);
+    return {
+      email: has("email") ? settings.email || "" : current.email || "",
+      sub: has("sub") ? settings.sub || "" : current.sub || "",
+    };
+  },
+
+  _mergeSecretSettings(current, settings = {}) {
+    const has = (key) => Object.hasOwn(settings, key);
+    return {
+      accessToken: has("accessToken") ? settings.accessToken || "" : current.accessToken || "",
+      refreshToken: has("refreshToken") ? settings.refreshToken || "" : current.refreshToken || "",
+      tokenExpiry: has("tokenExpiry")
+        ? (settings.tokenExpiry ?? null)
+        : (current.tokenExpiry ?? null),
+    };
+  },
+
+  _persistPublicSettings(settings) {
+    localStorage.setItem(
+      GMAIL_SETTINGS_KEY,
+      JSON.stringify(this._normalizePublicSettings(settings)),
+    );
+  },
+
+  _scrubPlaintextSecrets() {
+    const raw = this._readStoredSettings();
+    if (
+      !Object.hasOwn(raw, "accessToken") &&
+      !Object.hasOwn(raw, "refreshToken") &&
+      !Object.hasOwn(raw, "tokenExpiry")
+    ) {
+      return false;
+    }
+    this._persistPublicSettings(raw);
+    return true;
+  },
+
+  getLegacyPlaintextSettings() {
+    const raw = this._readStoredSettings();
+    return {
+      ...GMAIL_PUBLIC_DEFAULTS,
+      ...this._normalizePublicSettings(raw),
+      ...GMAIL_SECRET_DEFAULTS,
+      ...this._normalizeSecretSettings(raw),
+    };
+  },
+
+  async hydrateVaultSettings(vaultSettings = null) {
+    const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
+    const vaultPublic = this._normalizePublicSettings(vaultSettings || {});
+    const plaintext = this.getLegacyPlaintextSettings();
+    const mergedPublic = {
+      email: currentPublic.email || vaultPublic.email || "",
+      sub: currentPublic.sub || vaultPublic.sub || "",
+    };
+    this._persistPublicSettings(mergedPublic);
+
+    const secretFromVault = this._normalizeSecretSettings(vaultSettings || {});
+    const secretToPersist = this._hasSecretSettings(secretFromVault)
+      ? secretFromVault
+      : this._normalizeSecretSettings(plaintext);
+    const needsVaultRewrite =
+      !!vaultSettings &&
+      (vaultPublic.email || vaultPublic.sub || Object.keys(vaultSettings || {}).length > 3);
+
+    if (this._hasSecretSettings(secretToPersist)) {
+      const { Vault } = await import("./vault.js");
+      if (!this._hasSecretSettings(secretFromVault) || needsVaultRewrite) {
+        await Vault.saveGmailSettings(secretToPersist);
+      }
+      this.setDecrypted({ ...mergedPublic, ...secretToPersist });
+    } else {
+      this.clearDecrypted();
+    }
+
+    return { scrubbed: this._scrubPlaintextSecrets() };
+  },
+
+  getSettings() {
+    const publicSettings = this._normalizePublicSettings(this._readStoredSettings());
+    const decryptedPublic = this._decrypted ? this._normalizePublicSettings(this._decrypted) : {};
+    const decryptedSecret = this._decrypted ? this._normalizeSecretSettings(this._decrypted) : {};
+    return {
+      ...GMAIL_PUBLIC_DEFAULTS,
+      ...publicSettings,
+      ...decryptedPublic,
+      ...GMAIL_SECRET_DEFAULTS,
+      ...decryptedSecret,
+    };
   },
 
   async saveSettings(settings) {
-    // Merge and cache in-memory synchronously (before the async vault import) so
-    // that callers which do not await this method still see updated settings via
-    // getSettings() → _decrypted.
-    const current = this._decrypted || this.getSettings();
-    const merged = { ...current, ...settings };
-    this._decrypted = merged;
+    const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
+    const currentSecret = this._normalizeSecretSettings(this._decrypted || {});
+    const nextPublic = this._mergePublicSettings(currentPublic, settings);
+    const nextSecret = this._mergeSecretSettings(currentSecret, settings);
+
+    // Persist non-secret metadata synchronously so non-awaited callers still see
+    // updated email/sub state.
+    this._persistPublicSettings(nextPublic);
+    if (this._hasSecretSettings(nextSecret)) {
+      this.setDecrypted({ ...nextPublic, ...nextSecret });
+    } else {
+      this.clearDecrypted();
+    }
 
     const { Vault } = await import("./vault.js");
-    if (Vault.isConfigured() && Vault.isUnlocked()) {
-      await Vault.saveGmailSettings(merged);
+    if (!this._hasSecretSettings(nextSecret)) {
+      if (Vault.isConfigured() && Vault.isUnlocked()) {
+        Vault.clearGmailSettings();
+      }
       return;
     }
-    if (merged.accessToken || merged.refreshToken) {
+
+    if (Vault.isConfigured() && Vault.isUnlocked()) {
+      await Vault.saveGmailSettings(nextSecret);
+      return;
+    }
+
+    this.clearDecrypted();
+    if (nextSecret.accessToken || nextSecret.refreshToken) {
       throw new Error("Unlock the credential vault before storing Gmail credentials.");
     }
-    localStorage.setItem(GMAIL_SETTINGS_KEY, JSON.stringify(merged));
   },
 
   getAccountSub() {
@@ -1050,10 +1186,15 @@ JSON Array Response:`;
 
   _buildCategorizationPrompt(transactions, categories) {
     const transactionsSection = transactions
-      .map(
-        (tx, i) =>
-          `<transaction_content>\nTRANSACTION #${i + 1}:\nMerchant: ${tx.merchant_name || ""}\nDescription: ${maskPII(tx.description || "")}\nAmount: ${tx.amount || 0}\nBank/Source: ${tx.bank_name || ""}\n</transaction_content>`,
-      )
+      .map((tx, i) => {
+        const maskedMerchant = tx.merchant_name
+          ? maskPII(`Merchant: ${tx.merchant_name}`).replace(/^Merchant:\s*/i, "")
+          : "";
+        const maskedBankName = tx.bank_name
+          ? maskPII(`Bank/Source: ${tx.bank_name}`).replace(/^Bank\/Source:\s*/i, "")
+          : "";
+        return `<transaction_content>\nTRANSACTION #${i + 1}:\nMerchant: ${maskedMerchant}\nDescription: ${maskPII(tx.description || "")}\nAmount: ${tx.amount || 0}\nBank/Source: ${maskedBankName}\n</transaction_content>`;
+      })
       .join("\n");
 
     const categoriesList = categories.map((c) => c.name).join(", ");
@@ -1134,7 +1275,12 @@ JSON Array Response:`;
     // Step 3: Extract transactions (LLM or regex fallback)
     const batchSize = params.batch_size || 20;
     const allExtracted = [];
-    const llmAvailable = this._isLLMConfigured();
+    const provider = AI.getSettings().provider;
+    const consentRequired =
+      this._isLLMConfigured() &&
+      AI.requiresExternalConsent(provider) &&
+      !AI.hasExternalConsent(provider);
+    const llmAvailable = this._isLLMConfigured() && !consentRequired;
     let heuristicMode = false;
     let errors = 0;
     const errorDetails = [];
@@ -1261,6 +1407,7 @@ JSON Array Response:`;
       errorDetails,
       transactions: importedTxs,
       heuristic_mode: heuristicMode,
+      consent_required: consentRequired,
     };
   },
 

@@ -11,10 +11,10 @@ import { Vault } from "./vault.js";
 
 async function hydrateVaultState() {
   const aiSettings = await Vault.loadAISettings();
-  if (aiSettings) AI.setDecrypted(aiSettings);
+  await AI.hydrateVaultSettings(aiSettings);
 
   const gmailSettings = await Vault.loadGmailSettings();
-  if (gmailSettings) Gmail.setDecrypted(gmailSettings);
+  await Gmail.hydrateVaultSettings(gmailSettings);
 }
 
 async function finalizePendingGmailOAuth() {
@@ -303,24 +303,14 @@ export const API = {
     return true;
   },
   async setupVault(passphrase) {
-    // Capture existing plaintext credentials before encrypting
-    const aiSettings = AI.getSettings();
-    const gmailSettings = Gmail.getSettings();
+    // Capture any legacy plaintext settings before the vault becomes the source of truth.
+    const aiSettings = AI.getLegacyPlaintextSettings();
+    const gmailSettings = Gmail.getLegacyPlaintextSettings();
 
     await Vault.setup(passphrase);
 
-    // Migrate existing plaintext AI credentials into vault
-    if (aiSettings.provider || aiSettings.apiKey) {
-      await Vault.saveAISettings(aiSettings);
-      AI.setDecrypted(aiSettings);
-    }
-
-    // Migrate existing plaintext Gmail credentials into vault
-    if (gmailSettings.accessToken || gmailSettings.refreshToken) {
-      await Vault.saveGmailSettings(gmailSettings);
-      Gmail.setDecrypted(gmailSettings);
-      localStorage.removeItem(GMAIL_SETTINGS_KEY);
-    }
+    await AI.saveSettings(aiSettings);
+    await Gmail.saveSettings(gmailSettings);
   },
   lockVault() {
     Vault.lock();

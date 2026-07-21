@@ -17,6 +17,40 @@ async function setupAndLockVault(page, passphrase = "mysecurepass") {
 	await page.reload({ waitUntil: "domcontentloaded" });
 }
 
+async function installBiometricMocks(page) {
+	const install = () => {
+		const mockCredId = new Uint8Array([1, 2, 3, 4]);
+		const mockPrf = new Uint8Array([7, 8, 9, 10]).buffer;
+
+		Object.defineProperty(window, "PublicKeyCredential", {
+			configurable: true,
+			value: {
+				isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+			},
+		});
+
+		if (!navigator.credentials) {
+			Object.defineProperty(navigator, "credentials", { configurable: true, value: {} });
+		}
+
+		navigator.credentials.create = async () => ({
+			rawId: mockCredId,
+			getClientExtensionResults: () => ({
+				prf: { results: { first: mockPrf } },
+			}),
+		});
+
+		navigator.credentials.get = async () => ({
+			getClientExtensionResults: () => ({
+				prf: { results: { first: mockPrf } },
+			}),
+		});
+	};
+
+	await page.addInitScript(install);
+	await page.evaluate(install);
+}
+
 // ---------------------------------------------------------------------------
 // Group 1 – Vault settings card (these tests document the INTENDED UI)
 // ---------------------------------------------------------------------------
@@ -26,7 +60,7 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		// Vault section should appear
-		await expect(page.locator("text=Credential Vault")).toBeVisible();
+		await expect(page.getByRole("heading", { name: /Credential Vault/i })).toBeVisible();
 		await expect(page.locator('[data-action="vault-setup"]')).toBeVisible();
 	});
 
@@ -93,6 +127,26 @@ test.describe("Vault settings card", () => {
 		await page.click('[data-action="vault-lock"]');
 		// Page should reload and show unlock screen
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+	});
+
+	test("biometric enable flow shows active state after setup", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await installBiometricMocks(page);
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.click('[data-action="vault-setup"]');
+		await page.fill("#vault-setup-passphrase", "mysecurepass");
+		await page.fill("#vault-setup-confirm", "mysecurepass");
+		await page.click('[data-action="do-setup-vault"]');
+		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
+			timeout: 15_000,
+		});
+		await page.evaluate(async () => {
+			await window.API.setupBiometric("mysecurepass");
+		});
+		await page.goto("/#/");
+		await page.goto("/#/settings");
+		await expect(page.locator("text=Biometric unlock active")).toBeVisible({ timeout: 8_000 });
 	});
 });
 

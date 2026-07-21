@@ -79,7 +79,7 @@ export const GDrive = {
     });
     if (!resp.ok) throw new Error("Failed to fetch Google account info");
     const data = await resp.json();
-    Gmail.saveSettings({ email: data.emailAddress });
+    await Gmail.saveSettings({ email: data.emailAddress });
     return data.emailAddress;
   },
 
@@ -238,8 +238,8 @@ export const GDrive = {
     return JSON.parse(new TextDecoder().decode(new Uint8Array(plain)));
   },
 
-  _restoreSettings(envelope) {
-    if (!envelope?.settings) return { apiKeyRestored: false };
+  async _restoreSettings(envelope) {
+    if (!envelope?.settings) return { apiKeyRestored: false, apiKeySkipped: false };
     const backed = envelope.settings;
     const local = AI.getSettings();
     const merged = {
@@ -252,11 +252,10 @@ export const GDrive = {
       apiKey: local.apiKey || "",
     };
     let apiKeyRestored = false;
+    let apiKeySkipped = false;
     if (backed.apiKey && !local.apiKey) {
-      // Fresh restore: API key was missing locally — bring it in and enable the preference
       merged.apiKey = backed.apiKey;
       apiKeyRestored = true;
-      localStorage.setItem(GDRIVE_BACKUP_API_KEY_KEY, "true");
     }
     // Only save if something actually changed
     const changed =
@@ -268,7 +267,13 @@ export const GDrive = {
       merged.ollamaBaseUrl !== local.ollamaBaseUrl ||
       apiKeyRestored;
     if (changed) {
-      AI.saveSettings(merged);
+      const saveResult = await AI.saveSettings(merged);
+      if (!saveResult.ok && saveResult.vaultRequired && apiKeyRestored) {
+        apiKeyRestored = false;
+        apiKeySkipped = true;
+      } else if (apiKeyRestored) {
+        localStorage.setItem(GDRIVE_BACKUP_API_KEY_KEY, "true");
+      }
     }
     if (backed.gmailCustomSenders && !localStorage.getItem(GMAIL_CUSTOM_SENDERS_KEY)) {
       localStorage.setItem(GMAIL_CUSTOM_SENDERS_KEY, backed.gmailCustomSenders);
@@ -276,7 +281,7 @@ export const GDrive = {
     if (backed.gmailAutoSyncEnabled && !localStorage.getItem(GMAIL_AUTO_SYNC_ENABLED_KEY)) {
       localStorage.setItem(GMAIL_AUTO_SYNC_ENABLED_KEY, "true");
     }
-    return { apiKeyRestored };
+    return { apiKeyRestored, apiKeySkipped };
   },
 
   async getLastModified() {
@@ -336,7 +341,7 @@ export const GDrive = {
       });
 
       // Restore settings first so that upload() reflects the merged preference
-      const settingsRestored = this._restoreSettings(envelope);
+      const settingsRestored = await this._restoreSettings(envelope);
 
       if (envelope !== null) {
         stats = await DB.mergeFromJSON(envelope);

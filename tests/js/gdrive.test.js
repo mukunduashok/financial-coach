@@ -125,7 +125,7 @@ beforeEach(() => {
 		azureApiVersion: "",
 		ollamaBaseUrl: "",
 	});
-	mockAI.saveSettings.mockReturnValue(undefined);
+	mockAI.saveSettings.mockResolvedValue({ ok: true, publicSaved: true, secretSaved: true });
 });
 
 afterEach(() => {
@@ -908,19 +908,19 @@ describe("GDrive.upload — settings in envelope", () => {
 // 16. _restoreSettings
 // ===========================================================================
 describe("GDrive._restoreSettings", () => {
-	it("returns early when envelope is null", () => {
-		const result = GDrive._restoreSettings(null);
-		expect(result).toEqual({ apiKeyRestored: false });
+	it("returns early when envelope is null", async () => {
+		const result = await GDrive._restoreSettings(null);
+		expect(result).toEqual({ apiKeyRestored: false, apiKeySkipped: false });
 		expect(mockAI.saveSettings).not.toHaveBeenCalled();
 	});
 
-	it("returns early when envelope has no settings field", () => {
-		const result = GDrive._restoreSettings({ version: 1, tables: {} });
-		expect(result).toEqual({ apiKeyRestored: false });
+	it("returns early when envelope has no settings field", async () => {
+		const result = await GDrive._restoreSettings({ version: 1, tables: {} });
+		expect(result).toEqual({ apiKeyRestored: false, apiKeySkipped: false });
 		expect(mockAI.saveSettings).not.toHaveBeenCalled();
 	});
 
-	it("merges non-sensitive fields when local values are empty", () => {
+	it("merges non-sensitive fields when local values are empty", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: null,
 			apiKey: "",
@@ -940,13 +940,13 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		GDrive._restoreSettings(envelope);
+		await GDrive._restoreSettings(envelope);
 		expect(mockAI.saveSettings).toHaveBeenCalledWith(
 			expect.objectContaining({ provider: "openai", model: "gpt-4o" }),
 		);
 	});
 
-	it("does NOT overwrite already-set local provider/model", () => {
+	it("does NOT overwrite already-set local provider/model", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: "groq",
 			apiKey: "",
@@ -966,12 +966,12 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		GDrive._restoreSettings(envelope);
+		await GDrive._restoreSettings(envelope);
 		// Nothing changed (local already has provider+model), so saveSettings not called
 		expect(mockAI.saveSettings).not.toHaveBeenCalled();
 	});
 
-	it("restores apiKey when envelope has it and local is empty → apiKeyRestored: true", () => {
+	it("restores apiKey when envelope has it and local is empty → apiKeyRestored: true", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: "openai",
 			apiKey: "",
@@ -992,15 +992,16 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		const result = GDrive._restoreSettings(envelope);
+		const result = await GDrive._restoreSettings(envelope);
 		expect(result.apiKeyRestored).toBe(true);
+		expect(result.apiKeySkipped).toBe(false);
 		expect(mockAI.saveSettings).toHaveBeenCalledWith(
-			expect.objectContaining({ apiKey: "sk-backed-key" }),
+			expect.objectContaining({ provider: "openai", model: "gpt-4o" }),
 		);
 		expect(localStorage.setItem).toHaveBeenCalledWith("fincoach-gdrive-backup-api-key", "true");
 	});
 
-	it("does NOT restore apiKey when local apiKey is already set → apiKeyRestored: false", () => {
+	it("does NOT restore apiKey when local apiKey is already set → apiKeyRestored: false", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: "openai",
 			apiKey: "sk-existing",
@@ -1021,7 +1022,7 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		const result = GDrive._restoreSettings(envelope);
+		const result = await GDrive._restoreSettings(envelope);
 		expect(result.apiKeyRestored).toBe(false);
 		// local already had all same values (provider, model set) and apiKey was not overwritten
 		// saveSettings should not have been called since nothing changed
@@ -1031,7 +1032,7 @@ describe("GDrive._restoreSettings", () => {
 		expect(localStorage.setItem).not.toHaveBeenCalledWith("fincoach-gdrive-backup-api-key", "true");
 	});
 
-	it("does NOT set GDRIVE_BACKUP_API_KEY_KEY when backed.apiKey is absent", () => {
+	it("does NOT set GDRIVE_BACKUP_API_KEY_KEY when backed.apiKey is absent", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: null,
 			apiKey: "",
@@ -1052,12 +1053,13 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		const result = GDrive._restoreSettings(envelope);
+		const result = await GDrive._restoreSettings(envelope);
 		expect(result.apiKeyRestored).toBe(false);
+		expect(result.apiKeySkipped).toBe(false);
 		expect(localStorage.setItem).not.toHaveBeenCalledWith("fincoach-gdrive-backup-api-key", "true");
 	});
 
-	it("does NOT remove GDRIVE_BACKUP_API_KEY_KEY when backed.backupApiKeyEnabled is false (preference is per-device)", () => {
+	it("does NOT remove GDRIVE_BACKUP_API_KEY_KEY when backed.backupApiKeyEnabled is false (preference is per-device)", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: "openai",
 			apiKey: "sk-existing",
@@ -1078,12 +1080,12 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "",
 			},
 		};
-		GDrive._restoreSettings(envelope);
+		await GDrive._restoreSettings(envelope);
 		// Per-device preference: opt-out from another browser must NOT affect this browser
 		expect(localStorage.removeItem).not.toHaveBeenCalledWith("fincoach-gdrive-backup-api-key");
 	});
 
-	it("does NOT call AI.saveSettings when nothing changed", () => {
+	it("does NOT call AI.saveSettings when nothing changed", async () => {
 		mockAI.getSettings.mockReturnValue({
 			provider: "openai",
 			apiKey: "sk-existing",
@@ -1103,8 +1105,42 @@ describe("GDrive._restoreSettings", () => {
 				ollamaBaseUrl: "http://localhost:11434",
 			},
 		};
-		GDrive._restoreSettings(envelope);
+		await GDrive._restoreSettings(envelope);
 		expect(mockAI.saveSettings).not.toHaveBeenCalled();
+	});
+
+	it("reports apiKeySkipped when the restored key is blocked by vault-only storage", async () => {
+		mockAI.getSettings.mockReturnValue({
+			provider: "openai",
+			apiKey: "",
+			model: "gpt-4o",
+			azureResourceName: "",
+			azureDeploymentName: "",
+			azureApiVersion: "",
+			ollamaBaseUrl: "",
+		});
+		mockAI.saveSettings.mockResolvedValueOnce({
+			ok: false,
+			publicSaved: true,
+			secretSaved: false,
+			vaultRequired: true,
+		});
+		const envelope = {
+			settings: {
+				provider: "openai",
+				model: "gpt-4o",
+				apiKey: "«reda...…»",
+				azureResourceName: "",
+				azureDeploymentName: "",
+				azureApiVersion: "",
+				ollamaBaseUrl: "",
+			},
+		};
+
+		const result = await GDrive._restoreSettings(envelope);
+
+		expect(result).toEqual({ apiKeyRestored: false, apiKeySkipped: true });
+		expect(localStorage.setItem).not.toHaveBeenCalledWith("fincoach-gdrive-backup-api-key", "true");
 	});
 });
 
@@ -1122,7 +1158,9 @@ describe("GDrive.sync — settings restore", () => {
 		const envelope = { version: 1, schema_version: 1, tables: {}, settings: { provider: "openai" } };
 		vi.spyOn(GDrive, "download").mockResolvedValue(envelope);
 		vi.spyOn(GDrive, "upload").mockResolvedValue(undefined);
-		const restoreSpy = vi.spyOn(GDrive, "_restoreSettings").mockReturnValue({ apiKeyRestored: false });
+		const restoreSpy = vi
+			.spyOn(GDrive, "_restoreSettings")
+			.mockResolvedValue({ apiKeyRestored: false, apiKeySkipped: false });
 
 		await GDrive.sync();
 
@@ -1133,22 +1171,27 @@ describe("GDrive.sync — settings restore", () => {
 		const envelope = { version: 1, schema_version: 1, tables: {}, settings: { provider: "groq" } };
 		vi.spyOn(GDrive, "download").mockResolvedValue(envelope);
 		vi.spyOn(GDrive, "upload").mockResolvedValue(undefined);
-		vi.spyOn(GDrive, "_restoreSettings").mockReturnValue({ apiKeyRestored: true });
+		vi.spyOn(GDrive, "_restoreSettings").mockResolvedValue({
+			apiKeyRestored: true,
+			apiKeySkipped: false,
+		});
 
 		const result = await GDrive.sync();
 
-		expect(result.settingsRestored).toEqual({ apiKeyRestored: true });
+		expect(result.settingsRestored).toEqual({ apiKeyRestored: true, apiKeySkipped: false });
 	});
 
 	it("sync() returns apiKeyRestored: false when envelope is null (no remote backup)", async () => {
 		vi.spyOn(GDrive, "download").mockResolvedValue(null);
 		vi.spyOn(GDrive, "upload").mockResolvedValue(undefined);
-		const restoreSpy = vi.spyOn(GDrive, "_restoreSettings").mockReturnValue({ apiKeyRestored: false });
+		const restoreSpy = vi
+			.spyOn(GDrive, "_restoreSettings")
+			.mockResolvedValue({ apiKeyRestored: false, apiKeySkipped: false });
 
 		const result = await GDrive.sync();
 
 		expect(restoreSpy).toHaveBeenCalledWith(null);
-		expect(result.settingsRestored).toEqual({ apiKeyRestored: false });
+		expect(result.settingsRestored).toEqual({ apiKeyRestored: false, apiKeySkipped: false });
 	});
 });
 

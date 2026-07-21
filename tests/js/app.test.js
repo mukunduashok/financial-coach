@@ -60,6 +60,7 @@ const mockAPI = {
   getGoals: vi.fn().mockResolvedValue([]),
   getBudgets: vi.fn().mockResolvedValue([]),
   getChatHistory: vi.fn().mockResolvedValue({ chat_id: null, history: [] }),
+  sendChatMessageWithId: vi.fn().mockResolvedValue({ chat_id: "chat-1", response: "OK" }),
   exportTransactionsUrl: vi.fn().mockResolvedValue(null),
   createTransaction: vi.fn().mockResolvedValue({}),
   createAccount: vi.fn().mockResolvedValue({ id: 1, name: "Test Account" }),
@@ -91,8 +92,17 @@ vi.mock("../../static/js/api.js", () => ({ API: mockAPI }));
 vi.mock("../../static/js/ai.js", () => ({
   AI: {
     getSettings: vi.fn().mockReturnValue({}),
-    saveSettings: vi.fn(),
-    testConnection: vi.fn().mockResolvedValue({ success: true }),
+    requiresExternalConsent: vi.fn().mockReturnValue(false),
+    hasExternalConsent: vi.fn().mockReturnValue(true),
+    grantExternalConsent: vi.fn(),
+    revokeExternalConsent: vi.fn(),
+    saveSettings: vi.fn().mockResolvedValue({
+      ok: true,
+      publicSaved: true,
+      secretSaved: true,
+      vaultRequired: false,
+    }),
+    testConnection: vi.fn().mockResolvedValue({ ok: true }),
   },
   AI_PROVIDERS: {
     groq: { name: "Groq", requiresKey: true, defaultModel: "llama-3.3-70b-versatile" },
@@ -946,6 +956,115 @@ describe("BUG-UI-01: settings screen uses info-notice icons instead of inline bl
       p.style.borderLeft?.includes("solid"),
     );
     expect(inlineParagraphs).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// FINCO-59 — vault-only AI credential UX
+// ===========================================================================
+describe("FINCO-59: AI settings require the Credential Vault for API keys", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(async () => {
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+    AI.saveSettings.mockResolvedValue({
+      ok: true,
+      publicSaved: true,
+      secretSaved: true,
+      vaultRequired: false,
+    });
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+    mockAPI.isVaultUnlocked.mockReturnValue(false);
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders vault-only copy instead of localStorage API-key copy", async () => {
+    const screen = await renderSettings();
+    expect(screen.textContent).toContain("API keys are stored only in the Credential Vault");
+    expect(screen.textContent).not.toContain("localStorage");
+  });
+
+  it("shows a blocked status and vault setup modal when saving an API key without a vault", async () => {
+    AI.saveSettings.mockResolvedValueOnce({
+      ok: false,
+      publicSaved: true,
+      secretSaved: false,
+      vaultRequired: true,
+      error: "Set up a PIN before saving an AI API key.",
+    });
+
+    await renderSettings();
+    document.getElementById("ai-provider").value = "groq";
+    document.getElementById("ai-api-key").value = "sk-test";
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(AI.saveSettings).toHaveBeenCalled();
+    expect(AI.testConnection).not.toHaveBeenCalled();
+    expect(document.getElementById("settings-status").textContent).toContain(
+      "Set up a PIN before saving an AI API key.",
+    );
+    expect(document.getElementById("vault-setup-modal")).not.toBeNull();
+  });
+});
+
+// ===========================================================================
+// FINCO-60 — external AI consent UX
+// ===========================================================================
+describe("FINCO-60: external AI consent UX", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  async function renderChat() {
+    const renderFn = window.Router.routes["#/chat"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(() => {
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+    AI.requiresExternalConsent.mockReturnValue(true);
+    AI.hasExternalConsent.mockReturnValue(false);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    mockAPI.sendChatMessageWithId.mockClear();
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a review consent button in AI settings for external providers", async () => {
+    const screen = await renderSettings();
+    expect(screen.textContent).toContain("External AI consent");
+    expect(screen.querySelector('[data-action="review-ai-consent"]')).not.toBeNull();
+  });
+
+  it("prompts for consent before sending a chat message", async () => {
+    await renderChat();
+    const input = document.getElementById("chat-input");
+    input.value = "How much did I spend?";
+
+    document.getElementById("chat-send-btn").click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(document.querySelector('[data-action="confirm-ai-consent"]')).not.toBeNull();
+    expect(mockAPI.sendChatMessageWithId).not.toHaveBeenCalled();
   });
 });
 

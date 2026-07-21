@@ -20,6 +20,20 @@ async function getOptionTexts(locator) {
   return await Promise.all(Array.from({ length: count }, (_, i) => locator.nth(i).innerText()));
 }
 
+async function simulateVaultBackedGmailConnected(page, email = "testuser@example.com") {
+  await page.evaluate(async (e) => {
+    if (!window.API.isVaultConfigured()) {
+      await window.API.setupVault("1234");
+    }
+    await window.Gmail.saveSettings({
+      email: e,
+      accessToken: "fake-access-token",
+      refreshToken: "fake-refresh-token",
+      tokenExpiry: Date.now() + 3_600_000,
+    });
+  }, email);
+}
+
 test.describe("TestSettingsPage", () => {
   test.beforeEach(async ({ pwaPage }) => {
     await goSettings(pwaPage);
@@ -103,6 +117,28 @@ test.describe("TestSettingsPage", () => {
       bodyText.toLowerCase().includes("saved") ||
         bodyText.toLowerCase().includes("settings saved"),
     ).toBeTruthy();
+  });
+
+  test("saving an AI API key without a PIN opens vault setup and does not persist the key in localStorage", async ({
+    pwaPage,
+  }) => {
+    await pwaPage.selectOption("#ai-provider", "groq");
+    await pwaPage.waitForTimeout(300);
+    await pwaPage.fill("#ai-api-key", "sk-test-no-vault");
+
+    await pwaPage.locator("button:has-text('Save Settings')").click();
+
+    await expect(pwaPage.locator("#vault-setup-modal")).toBeVisible({ timeout: 5_000 });
+    await expect(pwaPage.locator("#settings-status")).toContainText(
+      "Set up a PIN before saving an AI API key.",
+    );
+
+    const stored = await pwaPage.evaluate(() => {
+      const raw = localStorage.getItem("fincoach-ai-settings");
+      return raw ? JSON.parse(raw) : null;
+    });
+    expect(stored).toMatchObject({ provider: "groq" });
+    expect(stored.apiKey).toBeUndefined();
   });
 });
 
@@ -297,10 +333,10 @@ test.describe("TestSettingsXSSProtection", () => {
 
     await goSettings(pwaPage);
 
-    // Input value should round-trip correctly — browser decodes &lt; back to <
+    // Secrets are no longer loaded from plaintext localStorage; the field should stay blank.
     const apiKeyInput = pwaPage.locator("#ai-api-key");
     const inputValue = await apiKeyInput.inputValue();
-    expect(inputValue).toBe(maliciousKey);
+    expect(inputValue).toBe("");
 
     // Page structure must remain intact — no script injected
     const bodyText = await pwaPage.innerText("body");
@@ -517,17 +553,8 @@ test.describe("TestGoogleDriveSyncConnected", () => {
         body: JSON.stringify({ files: [] }),
       });
     });
-    // Inject a fake Gmail token AND enable Drive sync so the full "active" UI renders
+    await simulateVaultBackedGmailConnected(pwaPage, "testuser@example.com");
     await pwaPage.evaluate(() => {
-      localStorage.setItem(
-        "fincoach-gmail-settings",
-        JSON.stringify({
-          accessToken: "fake-access-token",
-          refreshToken: "fake-refresh-token",
-          email: "testuser@example.com",
-          tokenExpiry: Date.now() + 3_600_000,
-        }),
-      );
       localStorage.setItem("fincoach-gdrive-enabled", "true");
     });
     await goSettings(pwaPage);
@@ -663,19 +690,7 @@ test.describe("TestBUGPROD01GDriveBackupApiKeyVisibility", () => {
 
 test.describe("TestGoogleDriveSyncDisabled", () => {
   test.beforeEach(async ({ pwaPage }) => {
-    // Gmail connected but Drive sync not yet enabled — the "disabled" middle state
-    await pwaPage.evaluate(() => {
-      localStorage.setItem(
-        "fincoach-gmail-settings",
-        JSON.stringify({
-          accessToken: "fake-access-token",
-          refreshToken: "fake-refresh-token",
-          email: "testuser@example.com",
-          tokenExpiry: Date.now() + 3_600_000,
-        }),
-      );
-      // GDRIVE_ENABLED_KEY intentionally NOT set
-    });
+    await simulateVaultBackedGmailConnected(pwaPage, "testuser@example.com");
     await goSettings(pwaPage);
   });
 

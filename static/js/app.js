@@ -214,9 +214,14 @@ document.addEventListener("click", (e) => {
 
   switch (action) {
     // Modal close
-    case "close-modal":
-      el.closest(".modal-overlay")?.remove();
+    case "close-modal": {
+      const overlay = el.closest(".modal-overlay");
+      if (overlay?.querySelector('[data-action="confirm-ai-consent"]')) {
+        pendingAIConsentAction = null;
+      }
+      overlay?.remove();
       break;
+    }
     case "close-and-new-chat":
       el.closest(".modal-overlay")?.remove();
       startNewChat();
@@ -504,6 +509,15 @@ document.addEventListener("click", (e) => {
       break;
     case "save-ai-settings":
       saveAISettings();
+      break;
+    case "review-ai-consent":
+      showAIConsentModal("settings");
+      break;
+    case "confirm-ai-consent":
+      confirmAIConsent(el.dataset.source || "settings");
+      break;
+    case "revoke-ai-consent":
+      revokeAIConsent();
       break;
     case "test-ai-connection":
       testAIConnection();
@@ -2534,6 +2548,9 @@ async function renderSync() {
     }
 
     const connected = gmailStatus.connected || gmailStatus.status === "connected";
+    const aiProvider = AI.getSettings().provider;
+    const needsAiConsent =
+      aiProvider && AI.requiresExternalConsent(aiProvider) && !AI.hasExternalConsent(aiProvider);
 
     screen.innerHTML = `
       <div class="card">
@@ -2566,6 +2583,11 @@ async function renderSync() {
 
         <button class="btn btn-primary btn-full" id="btn-sync" data-action="run-sync" style="margin-top:var(--space-md)">Sync Now</button>
         <button class="btn btn-secondary btn-full" id="btn-reset-sync-history" data-action="reset-sync-history" style="margin-top:var(--space-sm);font-size:0.85em">Re-import deleted transactions</button>
+        ${
+          needsAiConsent
+            ? `<p class="text-muted" style="margin-top:var(--space-sm);font-size:0.9em">External AI consent is required before Gmail extraction sends masked email content to ${escapeHtml(AI_PROVIDERS[aiProvider]?.name || aiProvider)}. Until then, Financial Coach will stay in local heuristic mode.</p>`
+            : ""
+        }
       </div>
 
       <div id="sync-results"></div>
@@ -2668,6 +2690,7 @@ async function resetSyncHistory() {
 async function runSync() {
   const btn = document.getElementById("btn-sync");
   const resultsDiv = document.getElementById("sync-results");
+
   btn.disabled = true;
   resultsDiv.innerHTML = `<div class="card"><div class="spinner"></div><p style="text-align:center;color:var(--color-text-secondary);margin-top:var(--space-sm)">Syncing emails… this may take a moment</p></div>`;
 
@@ -3305,6 +3328,7 @@ async function doDeleteAccount(id, btnEl) {
 let chatMessages = [];
 let chatLoading = false;
 let currentChatId = null;
+let pendingAIConsentAction = null;
 
 function formatChatTime(ts) {
   if (!ts) return "";
@@ -3315,6 +3339,74 @@ function formatChatTime(ts) {
   const time = d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
   if (isToday) return time;
   return `${d.toLocaleDateString("en-IN", { month: "short", day: "numeric" })} ${time}`;
+}
+
+function showAIConsentModal(source = "settings", onAccept = null) {
+  const providerKey = AI.getSettings().provider;
+  if (!providerKey || !AI.requiresExternalConsent(providerKey)) return;
+
+  pendingAIConsentAction = onAccept;
+  const providerName = AI_PROVIDERS[providerKey]?.name || providerKey;
+  const sourceLabel =
+    source === "sync"
+      ? "Gmail transaction extraction and categorisation"
+      : "financial chat responses and account summaries";
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.onclick = (e) => {
+    if (e.target === overlay) {
+      pendingAIConsentAction = null;
+      overlay.remove();
+    }
+  };
+  overlay.innerHTML = `
+    <div class="modal confirm-dialog">
+      <div class="modal-header">
+        <span class="modal-title">Allow external AI processing?</span>
+        <button class="modal-close" data-action="close-modal">&times;</button>
+      </div>
+      <p>
+        ${escapeHtml(providerName)} is an external AI provider. If you continue, Financial Coach may send
+        masked transaction descriptions, account summaries, budgets, goals, and relevant Gmail-derived
+        content from this device directly to ${escapeHtml(providerName)} for ${escapeHtml(sourceLabel)}.
+      </p>
+      <p class="text-muted" style="font-size:0.9em">
+        Detected identifiers like phone numbers, emails, PAN, Aadhaar, UPI handles, and labelled account
+        references are masked before sending when possible. Do not paste secrets or personal details that
+        you do not want shared. You can revoke this consent later in Settings.
+      </p>
+      <div class="modal-actions">
+        <button class="btn btn-outline" data-action="close-modal">Cancel</button>
+        <button class="btn btn-primary" data-action="confirm-ai-consent" data-source="${escapeHtml(source)}">I understand, continue</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+async function confirmAIConsent(source = "settings") {
+  const provider = AI.getSettings().provider;
+  if (provider) AI.grantExternalConsent(provider, source);
+  document.querySelector('[data-action="confirm-ai-consent"]')?.closest(".modal-overlay")?.remove();
+  const pending = pendingAIConsentAction;
+  pendingAIConsentAction = null;
+  Toast.success("External AI consent saved");
+  if (typeof pending === "function") {
+    await pending();
+  } else if (Router.currentScreen === "#/settings") {
+    await renderSettings();
+  }
+}
+
+async function revokeAIConsent() {
+  AI.revokeExternalConsent();
+  Toast.info(
+    "External AI consent revoked. Chat and Gmail extraction will stay local until you opt in again.",
+  );
+  if (Router.currentScreen === "#/settings") {
+    await renderSettings();
+  }
 }
 
 async function renderChat() {
@@ -3330,7 +3422,7 @@ async function renderChat() {
       <div class="chat-input-bar">
         <span class="info-notice chat-privacy-notice" tabindex="0" role="note" aria-label="Data sharing notice">
           ⚠️
-          <span class="info-notice-tooltip">Your financial data (transactions, accounts, goals, budgets) is sent to your AI provider. Sensitive fields like phone numbers, emails, PAN, and Aadhaar are auto-masked — but anything you type in this chat is sent as-is. Avoid sharing personal details in your messages.</span>
+          <span class="info-notice-tooltip">If you use an external AI provider, Financial Coach sends masked financial context from this browser directly to that provider after you consent. Detected identifiers in your chat are masked when possible, but avoid typing secrets or personal details you do not want shared. Ollama stays local to your device.</span>
         </span>
         <textarea id="chat-input" rows="1" placeholder="Ask your financial coach…" data-keydown="chat-input"></textarea>
         <button class="chat-send-btn" id="chat-send-btn" data-action="send-chat" title="Send">➤</button>
@@ -3449,6 +3541,14 @@ async function sendChatMessage() {
   const btn = document.getElementById("chat-send-btn");
   const message = input.value.trim();
   if (!message || chatLoading) return;
+
+  const provider = AI.getSettings().provider;
+  if (provider && AI.requiresExternalConsent(provider) && !AI.hasExternalConsent(provider)) {
+    showAIConsentModal("chat", async () => {
+      await sendChatMessage();
+    });
+    return;
+  }
 
   chatMessages.push({ role: "user", content: message, timestamp: new Date().toISOString() });
   input.value = "";
@@ -5542,6 +5642,8 @@ async function renderSettings() {
        <datalist id="ai-model-options">${modelSuggestions}</datalist>`;
 
   const showKey = currentProvider ? currentProvider.requiresKey : true;
+  const aiNeedsConsent = settings.provider && AI.requiresExternalConsent(settings.provider);
+  const aiConsentGranted = aiNeedsConsent ? AI.hasExternalConsent(settings.provider) : true;
   const gmailCustomSenders = (API.getGmailCustomSenders?.() ?? []).join(", ");
 
   const onboardingBanner = fromOnboarding
@@ -5626,10 +5728,10 @@ async function renderSettings() {
 
     <div class="card settings-section" style="margin-top: var(--space-lg)">
       <h2>AI Settings</h2>
-      <p class="text-muted">Configure your AI provider to enable chat. Your API key is stored locally in your browser.
+      <p class="text-muted">Configure your AI provider to enable chat. API keys are stored only in the Credential Vault and require an unlocked PIN to use.
         <span class="info-notice" tabindex="0" role="note" aria-label="Privacy notice">
           🔒
-          <span class="info-notice-tooltip">Transaction descriptions and account summaries are sent to your AI provider to answer questions. Phone numbers, emails, PAN, and Aadhaar are automatically masked before sending. Your raw data stays only in this browser.</span>
+          <span class="info-notice-tooltip">External providers receive masked financial context only after you explicitly consent. Ollama stays local on your device. Detected identifiers are masked before sending when possible, but you should still avoid sharing secrets in free-form prompts.</span>
         </span>
       </p>
 
@@ -5647,7 +5749,7 @@ async function renderSettings() {
           <button type="button" class="btn btn-sm" data-action="toggle-key-visibility">Show</button>
           <span class="info-notice" tabindex="0" role="note" aria-label="Security warning">
             ⚠️
-            <span class="info-notice-tooltip">Your API key is stored in your browser's localStorage. Avoid using this on shared devices.</span>
+            <span class="info-notice-tooltip">API keys are encrypted in the Credential Vault. Set up or unlock your PIN before saving them.</span>
           </span>
         </div>
         <small class="text-muted" style="font-weight:normal;display:block;margin-top:var(--space-xs)">Optional — the app works without a key, but AI features improve accuracy and enable personalised coaching.</small>
@@ -5676,6 +5778,29 @@ async function renderSettings() {
                value="${escapeHtml(settings.ollamaBaseUrl || "http://localhost:11434")}"
                placeholder="http://localhost:11434" />
       </div>
+
+      ${
+        aiNeedsConsent
+          ? `
+      <div class="settings-field">
+        <label>External AI consent</label>
+        <p class="text-muted" style="margin-bottom:var(--space-sm)">
+          ${
+            aiConsentGranted
+              ? `✓ Consent granted for ${escapeHtml(currentProvider?.name || settings.provider)}. Chat and Gmail extraction may send masked data directly to this provider from your browser.`
+              : `Consent not yet granted for ${escapeHtml(currentProvider?.name || settings.provider)}. Chat and Gmail extraction will stay local / heuristic until you opt in.`
+          }
+        </p>
+        <div class="settings-actions">
+          ${
+            aiConsentGranted
+              ? `<button class="btn btn-outline" data-action="revoke-ai-consent">Revoke Consent</button>`
+              : `<button class="btn" data-action="review-ai-consent">Review Consent</button>`
+          }
+        </div>
+      </div>`
+          : ""
+      }
 
       <div class="settings-actions">
         <button class="btn btn-primary" data-action="save-ai-settings">Save Settings</button>
@@ -5798,7 +5923,7 @@ ${
       ? `
   <div class="card settings-section" style="margin-top: var(--space-lg)">
     <h2>🔒 Credential Vault</h2>
-    <p class="text-muted">Your AI API keys and Gmail tokens are AES-256 encrypted.</p>
+    <p class="text-muted">Your AI API keys and Gmail tokens are AES-256 encrypted and only available while the vault is unlocked.</p>
     <div class="settings-field">
       <span style="color:var(--color-success,#2ecc71)">&#10003; PIN protection active</span>
     </div>
@@ -5808,6 +5933,9 @@ ${
       <button class="btn btn-sm btn-danger" data-action="vault-reset">Reset credentials</button>
     </div>
     <div style="margin-top:var(--space-md,1rem);padding-top:var(--space-md,1rem);border-top:1px solid var(--border)">
+      <p class="text-muted" style="font-size:0.85em;margin-bottom:var(--space-sm,0.5rem)">
+        If this device is lost or you forget your PIN, rotate AI API keys, revoke Google access, reconnect Gmail, and restore your latest Drive backup after setting a new PIN.
+      </p>
       <p class="text-muted" style="font-size:0.85em;margin-bottom:var(--space-sm,0.5rem)">
         🫆 Biometric Unlock
         <span style="cursor:help" title="Biometric is a convenience layer only. Your PIN provides the actual encryption key.">ℹ️</span>
@@ -5826,11 +5954,10 @@ ${
   <div class="card settings-section" style="margin-top: var(--space-lg);border-left:3px solid var(--color-primary)">
     <h2>🔒 Credential Vault</h2>
     <p class="text-muted">
-      ⚠️ Your API keys and Gmail tokens are stored unencrypted.
-      Protect them with a PIN.
+      Set up a PIN before saving AI API keys or connecting Gmail. Credential-backed features stay disabled until the vault is ready.
     </p>
     <p class="text-muted" style="font-size:0.85em;margin-top:var(--space-xs,0.25rem)">
-      Once set up, you can also enable biometric unlock (fingerprint / Face ID) for quick access.
+      Once set up, you can also enable biometric unlock (fingerprint / Face ID) for quick access. If you lose this device, rotate AI keys and revoke Google access from your Google account.
     </p>
     <button class="btn btn-primary btn-sm" style="margin-top:var(--space-sm,0.5rem)" data-action="vault-setup">Set up PIN protection</button>
   </div>`
@@ -5923,6 +6050,10 @@ async function runGdriveSync() {
     }
     if (result.settingsRestored?.apiKeyRestored) {
       Toast.info("AI API key restored from Drive backup.");
+    } else if (result.settingsRestored?.apiKeySkipped) {
+      Toast.info(
+        "AI API key skipped during Drive restore. Unlock the Credential Vault and sync again to restore it.",
+      );
     }
     await renderSettings();
   } catch (err) {
@@ -6141,7 +6272,7 @@ async function saveAISettings() {
     }
   }
 
-  await AI.saveSettings({
+  const result = await AI.saveSettings({
     provider,
     apiKey,
     model,
@@ -6150,13 +6281,23 @@ async function saveAISettings() {
     azureApiVersion,
     ollamaBaseUrl,
   });
-  Toast.show("Settings saved", "success");
-
-  if (apiKey && !API.isVaultConfigured()) {
-    showVaultSetupModal();
-  }
 
   const status = document.getElementById("settings-status");
+  if (!result.ok && result.vaultRequired) {
+    if (status) {
+      status.textContent = `⚠ ${result.error} Provider settings were saved.`;
+      status.className = "settings-status error";
+    }
+    Toast.show(result.error, "error");
+    if (!API.isVaultConfigured()) {
+      showVaultSetupModal();
+    } else if (!API.isVaultUnlocked()) {
+      renderVaultUnlock();
+    }
+    return;
+  }
+
+  Toast.show("Settings saved", "success");
   if (status) {
     status.textContent = "✓ Settings saved";
     status.className = "settings-status success";
@@ -6178,15 +6319,30 @@ async function testAIConnection() {
   const azureDeploymentName = document.getElementById("azure-deployment-name")?.value || "";
   const azureApiVersion =
     document.getElementById("azure-api-version")?.value || "2024-12-01-preview";
+  const ollamaBaseUrl = document.getElementById("ollama-base-url")?.value?.trim() || "";
   if (provider) {
-    AI.saveSettings({
+    const saveResult = await AI.saveSettings({
       provider,
       apiKey,
       model,
       azureResourceName,
       azureDeploymentName,
       azureApiVersion,
+      ollamaBaseUrl,
     });
+
+    if (!saveResult.ok && saveResult.vaultRequired) {
+      if (status) {
+        status.textContent = `✗ ${saveResult.error}`;
+        status.className = "settings-status error";
+      }
+      if (!API.isVaultConfigured()) {
+        showVaultSetupModal();
+      } else if (!API.isVaultUnlocked()) {
+        renderVaultUnlock();
+      }
+      return;
+    }
   }
 
   const result = await AI.testConnection();
@@ -6297,7 +6453,8 @@ async function renderOnboardingStep(step) {
 			<h2 class="onboarding-headline">Get a personal financial coach</h2>
 			<p class="onboarding-body">
 				Use Groq's free tier or run Ollama offline to get AI-powered insights, spending analysis,
-				and personalised financial coaching — all without your data leaving your device.
+				and personalised financial coaching. Ollama stays on-device; external providers are used
+				only after you explicitly consent to share masked financial context from this browser.
 			</p>
 			<div class="onboarding-actions">
 				<button class="btn btn-primary" data-action="onboarding-setup-ai">

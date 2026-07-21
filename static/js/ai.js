@@ -4,7 +4,7 @@
  * Direct REST calls to Groq/OpenAI/Ollama APIs (replaces LangChain).
  * Ports prompt logic from app/ai_agent.py to run entirely in the browser.
  */
-import { AI_SETTINGS_KEY } from "./config.js";
+import { AI_EXTERNAL_CONSENT_KEY, AI_SETTINGS_KEY } from "./config.js";
 import { DB } from "./db.js";
 import { fetchWithTimeout, maskPII } from "./utils.js";
 
@@ -220,6 +220,19 @@ const MONTH_LABEL = [
   "December",
 ];
 
+const AI_PUBLIC_DEFAULTS = {
+  provider: null,
+  model: "",
+  azureResourceName: "",
+  azureDeploymentName: "",
+  azureApiVersion: "",
+  ollamaBaseUrl: "",
+};
+
+const AI_SECRET_DEFAULTS = {
+  apiKey: "",
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -251,61 +264,213 @@ export const AI = {
     this._decrypted = null;
   },
 
-  getSettings() {
-    if (this._decrypted) return { ...this._decrypted };
+  _readStoredSettings() {
     try {
       const raw = localStorage.getItem(AI_SETTINGS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        return {
-          provider: parsed.provider || null,
-          apiKey: parsed.apiKey || "",
-          model: parsed.model || "",
-          azureResourceName: parsed.azureResourceName || "",
-          azureDeploymentName: parsed.azureDeploymentName || "",
-          azureApiVersion: parsed.azureApiVersion || "",
-          ollamaBaseUrl: parsed.ollamaBaseUrl || "",
-        };
-      }
+      return raw ? JSON.parse(raw) : {};
     } catch {
-      // ignore corrupt data
+      return {};
     }
-    return {
-      provider: null,
-      apiKey: "",
-      model: "",
-      azureResourceName: "",
-      azureDeploymentName: "",
-      azureApiVersion: "",
-      ollamaBaseUrl: "",
-    };
   },
 
-  async saveSettings(settings) {
-    const normalized = {
+  _normalizePublicSettings(settings = {}) {
+    return {
       provider: settings.provider || null,
-      apiKey: settings.apiKey || "",
       model: settings.model || "",
       azureResourceName: settings.azureResourceName || "",
       azureDeploymentName: settings.azureDeploymentName || "",
       azureApiVersion: settings.azureApiVersion || "",
       ollamaBaseUrl: settings.ollamaBaseUrl || "",
     };
-    // Persist to localStorage synchronously so callers that do not await this
-    // method still get updated settings via getSettings() → localStorage fallback.
-    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(normalized));
+  },
+
+  _normalizeSecretSettings(settings = {}) {
+    return {
+      apiKey: settings?.apiKey || "",
+    };
+  },
+
+  _mergePublicSettings(current, settings = {}) {
+    const has = (key) => Object.hasOwn(settings, key);
+    return {
+      provider: has("provider") ? settings.provider || null : current.provider || null,
+      model: has("model") ? settings.model || "" : current.model || "",
+      azureResourceName: has("azureResourceName")
+        ? settings.azureResourceName || ""
+        : current.azureResourceName || "",
+      azureDeploymentName: has("azureDeploymentName")
+        ? settings.azureDeploymentName || ""
+        : current.azureDeploymentName || "",
+      azureApiVersion: has("azureApiVersion")
+        ? settings.azureApiVersion || ""
+        : current.azureApiVersion || "",
+      ollamaBaseUrl: has("ollamaBaseUrl")
+        ? settings.ollamaBaseUrl || ""
+        : current.ollamaBaseUrl || "",
+    };
+  },
+
+  _mergeSecretSettings(current, settings = {}) {
+    return {
+      apiKey: Object.hasOwn(settings, "apiKey") ? settings.apiKey || "" : current.apiKey || "",
+    };
+  },
+
+  _persistPublicSettings(settings) {
+    localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(this._normalizePublicSettings(settings)));
+  },
+
+  _scrubPlaintextSecrets() {
+    const raw = this._readStoredSettings();
+    if (!Object.hasOwn(raw, "apiKey")) return false;
+    this._persistPublicSettings(raw);
+    return true;
+  },
+
+  getLegacyPlaintextSettings() {
+    const raw = this._readStoredSettings();
+    return {
+      ...AI_PUBLIC_DEFAULTS,
+      ...this._normalizePublicSettings(raw),
+      ...AI_SECRET_DEFAULTS,
+      ...this._normalizeSecretSettings(raw),
+    };
+  },
+
+  async hydrateVaultSettings(vaultSettings = null) {
+    const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
+    const vaultPublic = this._normalizePublicSettings(vaultSettings || {});
+    const plaintext = this.getLegacyPlaintextSettings();
+    const mergedPublic = {
+      provider: currentPublic.provider || vaultPublic.provider || null,
+      model: currentPublic.model || vaultPublic.model || "",
+      azureResourceName: currentPublic.azureResourceName || vaultPublic.azureResourceName || "",
+      azureDeploymentName:
+        currentPublic.azureDeploymentName || vaultPublic.azureDeploymentName || "",
+      azureApiVersion: currentPublic.azureApiVersion || vaultPublic.azureApiVersion || "",
+      ollamaBaseUrl: currentPublic.ollamaBaseUrl || vaultPublic.ollamaBaseUrl || "",
+    };
+    this._persistPublicSettings(mergedPublic);
+
+    const secretFromVault = this._normalizeSecretSettings(vaultSettings || {});
+    const secretToPersist = secretFromVault.apiKey || plaintext.apiKey || "";
+    const needsVaultRewrite =
+      !!vaultSettings &&
+      (vaultPublic.provider ||
+        vaultPublic.model ||
+        vaultPublic.azureResourceName ||
+        vaultPublic.azureDeploymentName ||
+        vaultPublic.azureApiVersion ||
+        vaultPublic.ollamaBaseUrl);
+
+    if (secretToPersist) {
+      const { Vault } = await import("./vault.js");
+      if (!secretFromVault.apiKey || needsVaultRewrite) {
+        await Vault.saveAISettings({ apiKey: secretToPersist });
+      }
+      this.setDecrypted({ ...mergedPublic, apiKey: secretToPersist });
+    } else {
+      this.clearDecrypted();
+    }
+
+    return { scrubbed: this._scrubPlaintextSecrets() };
+  },
+
+  getSettings() {
+    const publicSettings = this._normalizePublicSettings(this._readStoredSettings());
+    const decryptedPublic = this._decrypted ? this._normalizePublicSettings(this._decrypted) : {};
+    const decryptedSecret = this._decrypted ? this._normalizeSecretSettings(this._decrypted) : {};
+    return {
+      ...AI_PUBLIC_DEFAULTS,
+      ...publicSettings,
+      ...decryptedPublic,
+      ...AI_SECRET_DEFAULTS,
+      ...decryptedSecret,
+    };
+  },
+
+  isLocalOnlyProvider(provider = this.getSettings().provider) {
+    return provider === "ollama";
+  },
+
+  requiresExternalConsent(provider = this.getSettings().provider) {
+    return !!provider && !this.isLocalOnlyProvider(provider);
+  },
+
+  getExternalConsent() {
+    try {
+      const raw = localStorage.getItem(AI_EXTERNAL_CONSENT_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  hasExternalConsent(provider = this.getSettings().provider) {
+    if (!this.requiresExternalConsent(provider)) return true;
+    const consent = this.getExternalConsent();
+    return !!consent?.granted && consent.provider === provider;
+  },
+
+  grantExternalConsent(provider = this.getSettings().provider, source = "manual") {
+    if (!this.requiresExternalConsent(provider)) return;
+    localStorage.setItem(
+      AI_EXTERNAL_CONSENT_KEY,
+      JSON.stringify({ provider, granted: true, source, granted_at: new Date().toISOString() }),
+    );
+  },
+
+  revokeExternalConsent() {
+    localStorage.removeItem(AI_EXTERNAL_CONSENT_KEY);
+  },
+
+  async saveSettings(settings) {
+    const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
+    const currentSecret = this._normalizeSecretSettings(this._decrypted || {});
+    const nextPublic = this._mergePublicSettings(currentPublic, settings);
+    const nextSecret = this._mergeSecretSettings(currentSecret, settings);
+
+    // Persist non-secret preferences synchronously so callers that do not await
+    // this method still get updated provider/model state.
+    this._persistPublicSettings(nextPublic);
+    if (nextSecret.apiKey) {
+      this.setDecrypted({ ...nextPublic, ...nextSecret });
+    } else {
+      this.clearDecrypted();
+    }
 
     const { Vault } = await import("./vault.js");
-    if (Vault.isConfigured() && Vault.isUnlocked()) {
-      this._decrypted = { ...normalized };
-      await Vault.saveAISettings(normalized);
-      // Vault is the source of truth — remove plaintext copy from localStorage.
-      localStorage.removeItem(AI_SETTINGS_KEY);
-      return;
+    if (!nextSecret.apiKey) {
+      if (Vault.isConfigured() && Vault.isUnlocked()) {
+        Vault.clearAISettings();
+      }
+      return { ok: true, publicSaved: true, secretSaved: false, vaultRequired: false };
     }
-    // Plaintext path: localStorage is the source of truth; clear in-memory cache
-    // so getSettings() always reads fresh data from localStorage.
-    this._decrypted = null;
+
+    if (!Vault.isConfigured()) {
+      this.clearDecrypted();
+      return {
+        ok: false,
+        publicSaved: true,
+        secretSaved: false,
+        vaultRequired: true,
+        error: "Set up a PIN before saving an AI API key.",
+      };
+    }
+
+    if (!Vault.isUnlocked()) {
+      this.clearDecrypted();
+      return {
+        ok: false,
+        publicSaved: true,
+        secretSaved: false,
+        vaultRequired: true,
+        error: "Unlock your PIN before saving an AI API key.",
+      };
+    }
+
+    await Vault.saveAISettings(nextSecret);
+    return { ok: true, publicSaved: true, secretSaved: true, vaultRequired: false };
   },
 
   // ========================================================================
@@ -593,13 +758,13 @@ export const AI = {
     }, 0);
 
     // Format accounts summary
-    const accountsLines = accounts.map((a) => {
+    const accountsLines = accounts.map((a, index) => {
       if (a.account_type && BALANCE_ACCOUNT_TYPES.has(a.account_type.toLowerCase())) {
         const bal = a.effective_balance != null ? a.effective_balance : a.balance;
         const displayBal = a.account_type.toLowerCase() === "credit" ? -bal : bal;
-        return `- ${a.name}: ₹${displayBal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} (${a.account_type})`;
+        return `- Account ${index + 1}: ₹${displayBal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} (${a.account_type})`;
       }
-      return `- ${a.name} (${a.account_type || "unknown"})`;
+      return `- Account ${index + 1} (${a.account_type || "unknown"})`;
     });
     const accountsSummary = accountsLines.join("\n");
 
@@ -637,10 +802,10 @@ export const AI = {
     const categorySummary = categoryLines.join("\n");
 
     // Format goals
-    const goalsLines = goals.map((g) => {
+    const goalsLines = goals.map((g, index) => {
       const pct =
         g.target_amount > 0 ? ((g.current_amount / g.target_amount) * 100).toFixed(1) : "0.0";
-      return `- ${g.name}: ₹${g.current_amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} / ₹${g.target_amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} (${pct}% complete) - Deadline: ${g.deadline || "none"}`;
+      return `- Goal ${index + 1}: ₹${g.current_amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} / ₹${g.target_amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })} (${pct}% complete) - Deadline: ${g.deadline || "none"}`;
     });
     const goalsSummary = goalsLines.join("\n");
 
@@ -696,7 +861,7 @@ Current Date: ${todayStr}
 
     const base = BASE_INSTRUCTIONS.replace("{context}", context)
       .replace("{history_context}", historyContext)
-      .replace("{question}", question);
+      .replace("{question}", maskPII(question));
 
     const specific = PROMPT_TEMPLATES[questionType] || PROMPT_TEMPLATES.general;
 
@@ -709,11 +874,29 @@ Current Date: ${todayStr}
   async chat(message, chatId = null) {
     const settings = this.getSettings();
     const resolvedChatId = chatId || crypto.randomUUID();
+    const maskedMessage = maskPII(message);
     if (!settings.provider) {
       await DB.saveChatMessage(resolvedChatId, "user", message);
       const heuristicResponse = await this._buildHeuristicResponse(message);
       await DB.saveChatMessage(resolvedChatId, "assistant", heuristicResponse);
       return { response: heuristicResponse, model_used: "heuristic", chat_id: resolvedChatId };
+    }
+
+    if (
+      this.requiresExternalConsent(settings.provider) &&
+      !this.hasExternalConsent(settings.provider)
+    ) {
+      await DB.saveChatMessage(resolvedChatId, "user", message);
+      const heuristicResponse = await this._buildHeuristicResponse(message);
+      const consentNote =
+        "\n\n---\n*External AI is configured but not yet enabled. Review and accept the data-sharing consent in Settings or when prompted in Chat/Sync to send data to your provider. Until then, chat stays in local heuristic mode.*";
+      await DB.saveChatMessage(resolvedChatId, "assistant", `${heuristicResponse}${consentNote}`);
+      return {
+        response: `${heuristicResponse}${consentNote}`,
+        model_used: "heuristic",
+        chat_id: resolvedChatId,
+        consent_required: true,
+      };
     }
 
     // Save user message
@@ -744,7 +927,7 @@ Current Date: ${todayStr}
     const messages = [
       { role: "system", content: systemPrompt },
       ...historySlice,
-      { role: "user", content: message },
+      { role: "user", content: maskedMessage },
     ];
 
     // Build headers and endpoint — azure uses a different auth scheme and URL

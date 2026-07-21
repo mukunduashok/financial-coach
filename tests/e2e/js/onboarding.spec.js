@@ -224,9 +224,8 @@ test.describe("OnboardingWizard", () => {
   // -------------------------------------------------------------------------
   // 12. step 5 Gmail connected status — shows email when connected
   // -------------------------------------------------------------------------
-  test("step 5 shows Gmail connected with email when tokens and email are in localStorage", async ({ freshPage }) => {
-    // Set Gmail connected state in localStorage before advancing to step 5.
-    // advanceToStep reloads the page but does not clear Gmail settings.
+  test("step 5 does not treat plaintext Gmail tokens in localStorage as connected", async ({ freshPage }) => {
+    // Plaintext localStorage tokens should no longer count as connected state.
     await freshPage.evaluate(() => {
       localStorage.setItem(
         "fincoach-gmail-settings",
@@ -243,8 +242,8 @@ test.describe("OnboardingWizard", () => {
     const list = freshPage.locator(".onboarding-summary-list");
     await expect(list).toBeVisible();
     const text = await list.innerText();
-    expect(text).toContain("Gmail connected");
-    expect(text).toContain("test@gmail.com");
+    expect(text).toContain("Gmail not connected");
+    expect(text).not.toContain("Gmail connected");
   });
 
   // -------------------------------------------------------------------------
@@ -265,8 +264,8 @@ test.describe("OnboardingWizard", () => {
   // 14. step 5 Gmail connected without email — still shows "connected"
   //     (regression guard: old code checked gmailStatus.email, not .connected)
   // -------------------------------------------------------------------------
-  test("step 5 shows Gmail connected even when email is absent from settings", async ({ freshPage }) => {
-    // Set tokens but omit the email field — simulates the bug scenario
+  test("step 5 does not treat plaintext Gmail tokens without email as connected", async ({ freshPage }) => {
+    // Plaintext localStorage tokens should no longer count as connected state.
     await freshPage.evaluate(() => {
       localStorage.setItem(
         "fincoach-gmail-settings",
@@ -283,8 +282,7 @@ test.describe("OnboardingWizard", () => {
     const list = freshPage.locator(".onboarding-summary-list");
     await expect(list).toBeVisible();
     const text = await list.innerText();
-    expect(text).toContain("Gmail connected");
-    // No email address should appear since none was stored
+    expect(text).toContain("Gmail not connected");
     expect(text).not.toContain("@");
   });
 

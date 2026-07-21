@@ -40,6 +40,7 @@ vi.mock("../../static/js/config.js", () => ({
 	GMAIL_OAUTH_PENDING_STATE_KEY: "fincoach-gmail-oauth-pending-state",
 	GMAIL_OAUTH_STATE_TTL_MS: 300_000,
 	AI_SETTINGS_KEY: "fincoach-ai-settings",
+	AI_EXTERNAL_CONSENT_KEY: "fincoach-ai-external-consent",
 	GMAIL_CUSTOM_SENDERS_KEY: "fincoach-gmail-custom-senders",
 	GMAIL_AUTO_SYNC_ENABLED_KEY: "fincoach-gmail-auto-sync-enabled",
 	GMAIL_AUTO_SYNC_LAST_KEY: "fincoach-gmail-auto-sync-last",
@@ -55,6 +56,7 @@ vi.mock("../../static/js/vault.js", () => ({
 		isConfigured: vi.fn(() => true),
 		isUnlocked: vi.fn(() => true),
 		saveGmailSettings: vi.fn(),
+		clearGmailSettings: vi.fn(),
 	},
 }));
 
@@ -98,7 +100,9 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   Vault.isConfigured.mockReturnValue(true);
   Vault.isUnlocked.mockReturnValue(true);
+  Vault.saveGmailSettings.mockReset();
   Vault.saveGmailSettings.mockResolvedValue(undefined);
+  Vault.clearGmailSettings.mockReset();
   globalThis.fetch = originalFetch;
   globalThis.open = originalOpen;
   Gmail.clearDecrypted();
@@ -118,13 +122,23 @@ afterEach(() => {
 describe("Gmail Settings", () => {
   it("returns empty object when no settings saved", () => {
     const s = Gmail.getSettings();
-    expect(s).toEqual({});
+    expect(s).toEqual({
+      email: "",
+      sub: "",
+      accessToken: "",
+      refreshToken: "",
+      tokenExpiry: null,
+    });
   });
 
   it("saves and loads settings", async () => {
     await Gmail.saveSettings({ email: "user@example.com" });
     const s = Gmail.getSettings();
     expect(s.email).toBe("user@example.com");
+    expect(JSON.parse(localStorageData["fincoach-gmail-settings"])).toEqual({
+      email: "user@example.com",
+      sub: "",
+    });
   });
 
   it("merges settings without overwriting existing keys", async () => {
@@ -142,6 +156,30 @@ describe("Gmail Settings", () => {
     await expect(Gmail.saveSettings({ accessToken: "tok123" })).rejects.toThrow(
       "Unlock the credential vault before storing Gmail credentials.",
     );
+    expect(localStorageData["fincoach-gmail-settings"]).toBe(JSON.stringify({ email: "", sub: "" }));
+  });
+
+  it("migrates legacy plaintext Gmail tokens into the vault and scrubs localStorage", async () => {
+    localStorageData["fincoach-gmail-settings"] = JSON.stringify({
+      email: "user@example.com",
+      sub: "sub-123",
+      accessToken: "legacy-access",
+      refreshToken: "legacy-refresh",
+      tokenExpiry: 123,
+    });
+
+    await Gmail.hydrateVaultSettings(null);
+
+    expect(Vault.saveGmailSettings).toHaveBeenCalledWith({
+      accessToken: "legacy-access",
+      refreshToken: "legacy-refresh",
+      tokenExpiry: 123,
+    });
+    expect(JSON.parse(localStorageData["fincoach-gmail-settings"])).toEqual({
+      email: "user@example.com",
+      sub: "sub-123",
+    });
+    expect(Gmail.getSettings().accessToken).toBe("legacy-access");
   });
 });
 
@@ -168,8 +206,8 @@ describe("Gmail OAuth", () => {
     });
     Gmail.disconnect();
     const s = Gmail.getSettings();
-    expect(s.accessToken).toBeUndefined();
-    expect(s.refreshToken).toBeUndefined();
+    expect(s.accessToken).toBe("");
+    expect(s.refreshToken).toBe("");
   });
 
   it("connect fetches auth URL from proxy", async () => {
@@ -653,10 +691,9 @@ describe("Categorization Prompt", () => {
     ];
     const prompt = Gmail._buildCategorizationPrompt(transactions, categories);
     expect(prompt).toContain("TRANSACTION #1:");
-    expect(prompt).toContain("Merchant: Swiggy");
+    expect(prompt).toContain("Merchant: Sw****");
     expect(prompt).toContain("Food & Dining, Shopping");
     expect(prompt).toContain("JSON Array Response:");
-    expect(prompt).toContain("Bank/Source: HDFC");
   });
 
   it("_buildCategorizationPrompt uses bank_name not email_from", () => {
@@ -670,7 +707,7 @@ describe("Categorization Prompt", () => {
     ];
     const categories = [{ name: "Other", description: "Other" }];
     const prompt = Gmail._buildCategorizationPrompt(transactions, categories);
-    expect(prompt).toContain("Bank/Source: HDFC");
+    expect(prompt).toContain("Bank/Source: HD**");
     expect(prompt).not.toContain("alerts@hdfc.com");
   });
 
@@ -694,8 +731,8 @@ describe("Categorization Prompt", () => {
       [{ merchant_name: "Swiggy", description: "food delivery", amount: -350, bank_name: "HDFC" }],
       categories,
     );
-    expect(prompt).toContain("Merchant: Swiggy");
-    const merchantIdx = prompt.indexOf("Merchant: Swiggy");
+    expect(prompt).toContain("Merchant: Sw****");
+    const merchantIdx = prompt.indexOf("Merchant: Sw****");
     const descIdx = prompt.indexOf("Description: food delivery");
     expect(merchantIdx).toBeLessThan(descIdx);
   });
@@ -1122,15 +1159,18 @@ describe("LLM Call", () => {
   });
 
   it("_callLLM throws for unknown provider", async () => {
-    localStorageData["fincoach-ai-settings"] = JSON.stringify({
+    const { AI } = await import("../../static/js/ai.js");
+    AI.setDecrypted({
       provider: "nonexistent",
-      apiKey: "key",
+      apiKey: "x",
     });
     await expect(Gmail._callLLM("test prompt")).rejects.toThrow("Unknown AI provider");
+    AI.setDecrypted(null);
   });
 
   it("_callLLM sends correct request to Groq", async () => {
-    localStorageData["fincoach-ai-settings"] = JSON.stringify({
+    const { AI } = await import("../../static/js/ai.js");
+    AI.setDecrypted({
       provider: "groq",
       apiKey: "test-key",
       model: "test-model",
@@ -1152,6 +1192,7 @@ describe("LLM Call", () => {
     expect(body.model).toBe("test-model");
     expect(body.messages[0].content).toBe("test prompt");
     expect(call[1].headers.Authorization).toBe("Bearer test-key");
+    AI.setDecrypted(null);
   });
 
   it("_callLLM uses vault-decrypted settings when vault is unlocked", async () => {
@@ -1184,7 +1225,8 @@ describe("LLM Call", () => {
   });
 
   it("_callLLM uses default model when none specified", async () => {
-    localStorageData["fincoach-ai-settings"] = JSON.stringify({
+    const { AI } = await import("../../static/js/ai.js");
+    AI.setDecrypted({
       provider: "groq",
       apiKey: "test-key",
     });
@@ -1199,6 +1241,7 @@ describe("LLM Call", () => {
     await Gmail._callLLM("prompt");
     const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
     expect(body.model).toBe("openai/gpt-oss-120b");
+    AI.setDecrypted(null);
   });
 
   it("_callLLM does not send Authorization for Ollama", async () => {
@@ -2242,6 +2285,12 @@ describe("extractTransactions — errorDetails", () => {
       apiKey: "test-key",
       model: "test-model",
     });
+    localStorageData["fincoach-ai-external-consent"] = JSON.stringify({
+      provider: "groq",
+      granted: true,
+      source: "test",
+      granted_at: "2026-07-21T00:00:00.000Z",
+    });
     vi.spyOn(Gmail, "searchEmails").mockResolvedValue({
       messages: rawEmails.map((raw, i) => ({ id: `msg_ed_${i}`, raw })),
       skippedCount: 0,
@@ -2680,6 +2729,37 @@ describe("extractTransactions — heuristic path", () => {
     expect(result.heuristic_mode).toBe(true);
   });
 
+  it("falls back to heuristic mode when external AI consent is missing", async () => {
+    await setupGmailConnection();
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({
+      provider: "groq",
+      apiKey: "test-key",
+      model: "test-model",
+    });
+    vi.spyOn(Gmail, "_extractWithRegex").mockReturnValue({
+      amount: -100,
+      transaction_type: "expense",
+      date: "2025-01-15T10:00",
+      description: "Method: Bank Transfer",
+      merchant_upi_id: null,
+      merchant_name: null,
+      account_last_digits: "9804",
+      account_type: "savings",
+      bank_name: "HDFC",
+      balance_after: null,
+      transaction_id: null,
+      category: null,
+      is_transaction: true,
+      is_balance_info: false,
+    });
+    const spy = vi.spyOn(Gmail, "_callLLM");
+    mockEmailFetch("msg_h4b", parseableRaw);
+    const result = await Gmail.extractTransactions({ days: 7 });
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.heuristic_mode).toBe(true);
+    expect(result.consent_required).toBe(true);
+  });
+
   it("increments errors count when regex returns null", async () => {
     await setupGmailConnection();
     mockEmailFetch("msg_h4", unparseableRaw);
@@ -2696,10 +2776,37 @@ describe("extractTransactions — heuristic path", () => {
       apiKey: "test-key",
       model: "test-model",
     });
+    localStorageData["fincoach-ai-external-consent"] = JSON.stringify({
+      provider: "groq",
+      granted: true,
+      source: "test",
+      granted_at: "2026-07-21T00:00:00.000Z",
+    });
     const spy = vi.spyOn(Gmail, "_callLLM").mockResolvedValue(JSON.stringify([]));
     mockEmailFetch("msg_h5", parseableRaw);
     await Gmail.extractTransactions({ days: 7 });
     expect(spy).toHaveBeenCalled();
+  });
+});
+
+describe("categorization prompt masking", () => {
+  it("masks merchant and bank/source labels in categorization prompts", () => {
+    const prompt = Gmail._buildCategorizationPrompt(
+      [
+        {
+          merchant_name: "Blinkit",
+          description: "Paid via paytm-blinkit@ptybl",
+          amount: -450,
+          bank_name: "HDFC Savings",
+        },
+      ],
+      [{ name: "Food", description: "Food orders" }],
+    );
+
+    expect(prompt).not.toContain("paytm-blinkit@ptybl");
+    expect(prompt).toContain("pa***@[UPI]");
+    expect(prompt).toContain("Merchant: Bl*****");
+    expect(prompt).toContain("Bank/Source: HD** Sa*****");
   });
 });
 
@@ -3048,7 +3155,7 @@ describe("_fetchAndStoreSub", () => {
 
 		await Gmail._fetchAndStoreSub(); // must not throw
 
-		expect(Gmail.getSettings().sub).toBeUndefined();
+		expect(Gmail.getSettings().sub).toBe("");
 	});
 
 	it("does not save sub when data.sub is absent in the response", async () => {
@@ -3065,7 +3172,7 @@ describe("_fetchAndStoreSub", () => {
 
 		await Gmail._fetchAndStoreSub();
 
-		expect(Gmail.getSettings().sub).toBeUndefined();
+		expect(Gmail.getSettings().sub).toBe("");
 	});
 
 	it("swallows errors silently so it is safe to call fire-and-forget", async () => {
@@ -3115,7 +3222,7 @@ describe("_fetchAndStoreSub", () => {
 
 		const settings = Gmail.getSettings();
 		expect(settings.sub).toBe("sub-only");
-		expect(settings.email).toBeUndefined();
+		expect(settings.email).toBe("");
 	});
 });
 
@@ -3350,6 +3457,12 @@ describe("BUG-GMAIL-SIP: Gmail message ID bypasses field-based duplicate check",
 			provider: "groq",
 			apiKey: "test-key",
 			model: "test-model",
+		});
+		localStorageData["fincoach-ai-external-consent"] = JSON.stringify({
+			provider: "groq",
+			granted: true,
+			source: "test",
+			granted_at: "2026-07-21T00:00:00.000Z",
 		});
 
 		const sipTxTemplate = {

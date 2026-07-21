@@ -12,10 +12,35 @@ const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const AUTH_RESULT_TTL_MS = 5 * 60 * 1000;
 const AUTH_RESULT_STORAGE_KEY = "auth-result";
+const JSON_TEXT_ENCODER = new TextEncoder();
+const BODY_SIZE_LIMITS = {
+  consume: 1024,
+  refresh: 4096,
+};
+const RATE_LIMIT_POLICIES = {
+  authUrl: { limit: 20, windowMs: 60 * 1000 },
+  authConsume: { limit: 10, windowMs: 60 * 1000 },
+  authRefresh: { limit: 6, windowMs: 5 * 60 * 1000 },
+  callbackError: { limit: 2, windowMs: 5 * 60 * 1000 },
+};
 const SCOPES =
   "https://www.googleapis.com/auth/gmail.readonly " +
   "https://www.googleapis.com/auth/drive.appdata " +
   "openid email";
+
+class InvalidJsonBodyError extends Error {
+  constructor() {
+    super("Invalid JSON body");
+    this.name = "InvalidJsonBodyError";
+  }
+}
+
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super("Request body too large");
+    this.name = "RequestBodyTooLargeError";
+  }
+}
 
 function _originAllowed(origin, allowedOrigins = "") {
   if (!origin || !allowedOrigins) return false;
@@ -58,7 +83,93 @@ function jsonResponse(body, status, origin, allowedOrigin, extraHeaders = {}) {
   });
 }
 
-async function handleAuthUrl(env, origin, stateParam = "") {
+function securityLog(event, details = {}) {
+  console.warn(JSON.stringify({ event, ...details }));
+}
+
+function clientFingerprint(request, origin = "") {
+  const forwardedIp =
+    request.headers.get("CF-Connecting-IP") ||
+    request.headers.get("X-Forwarded-For") ||
+    request.headers.get("Fly-Client-IP") ||
+    "unknown";
+  return `${forwardedIp}:${origin || "no-origin"}`;
+}
+
+function originDeniedResponse(route, origin, env) {
+  securityLog("origin_not_allowed", { route, origin: origin || "missing" });
+  return jsonResponse({ error: "Origin not allowed" }, 403, origin, env.ALLOWED_ORIGIN, noStoreHeaders());
+}
+
+function rateLimitJsonResponse(origin, env, retryAfter) {
+  return jsonResponse(
+    { error: "Rate limit exceeded. Try again later." },
+    429,
+    origin,
+    env.ALLOWED_ORIGIN,
+    noStoreHeaders({ "Retry-After": String(retryAfter) }),
+  );
+}
+
+function rateLimitHtmlResponse(targetOrigin, retryAfter) {
+  return new Response(
+    callbackHTML("error", { error: "Too many requests", retry_after: retryAfter }, targetOrigin),
+    {
+      status: 429,
+      headers: noStoreHeaders({ "Content-Type": "text/html", "Retry-After": String(retryAfter) }),
+    },
+  );
+}
+
+function createSafeErrorMessage(prefix, ref) {
+  return `${prefix} Please try again later. Reference: ${ref}`;
+}
+
+function createErrorRef() {
+  return crypto.randomUUID().slice(0, 8);
+}
+
+async function readJsonBody(request, maxBytes) {
+  const text = await request.text();
+  if (JSON_TEXT_ENCODER.encode(text).length > maxBytes) {
+    throw new RequestBodyTooLargeError();
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new InvalidJsonBodyError();
+  }
+}
+
+async function enforceRateLimit(env, route, key) {
+  if (!env.RATE_LIMITER) return null;
+
+  const id = env.RATE_LIMITER.idFromName(route);
+  const stub = env.RATE_LIMITER.get(id);
+  const resp = await stub.fetch("https://rate-limiter.internal/check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, route }),
+  });
+
+  if (resp.status !== 429) return null;
+
+  const payload = await resp.json().catch(() => ({}));
+  return payload.retry_after || 60;
+}
+
+async function handleAuthUrl(request, env, origin, stateParam = "") {
+  if (!_originAllowed(origin, env.ALLOWED_ORIGIN)) {
+    return originDeniedResponse("/auth/url", origin, env);
+  }
+
+  const retryAfter = await enforceRateLimit(env, "authUrl", clientFingerprint(request, origin));
+  if (retryAfter) {
+    securityLog("rate_limited", { route: "/auth/url", origin, retryAfter });
+    return rateLimitJsonResponse(origin, env, retryAfter);
+  }
+
   const params = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
     redirect_uri: env.REDIRECT_URI,
@@ -89,6 +200,7 @@ async function storeAuthResult(env, result) {
 
 async function handleCallback(request, env) {
   const url = new URL(request.url);
+  const origin = request.headers.get("Origin") || "";
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
   const rawState = url.searchParams.get("state") || "";
@@ -99,13 +211,26 @@ async function handleCallback(request, env) {
       const decoded = JSON.parse(atob(rawState));
       if (decoded.origin && _originAllowed(decoded.origin, env.ALLOWED_ORIGIN)) {
         targetOrigin = decoded.origin;
+      } else if (decoded.origin) {
+        securityLog("callback_origin_mismatch", { origin: decoded.origin });
       }
     } catch {
-      // malformed state — keep targetOrigin as "null"
+      securityLog("callback_state_invalid", { reason: "decode_failed" });
+    }
+  }
+
+  const callbackKey = clientFingerprint(request, targetOrigin === "null" ? origin : targetOrigin);
+
+  if (error || !code) {
+    const retryAfter = await enforceRateLimit(env, "callbackError", callbackKey);
+    if (retryAfter) {
+      securityLog("rate_limited", { route: "/auth/callback", reason: error || "missing_code", retryAfter });
+      return rateLimitHtmlResponse(targetOrigin, retryAfter);
     }
   }
 
   if (error) {
+    securityLog("oauth_callback_failed", { reason: error });
     return new Response(callbackHTML("error", { error, state: rawState }, targetOrigin), {
       status: 400,
       headers: noStoreHeaders({ "Content-Type": "text/html" }),
@@ -113,6 +238,7 @@ async function handleCallback(request, env) {
   }
 
   if (!code) {
+    securityLog("oauth_callback_failed", { reason: "missing_code" });
     return new Response(
       callbackHTML("error", { error: "No authorization code received", state: rawState }, targetOrigin),
       {
@@ -136,11 +262,12 @@ async function handleCallback(request, env) {
     });
 
     if (!tokenResp.ok) {
-      const errBody = await tokenResp.text();
+      const ref = createErrorRef();
+      securityLog("oauth_token_exchange_failed", { status: tokenResp.status, ref });
       return new Response(
         callbackHTML(
           "error",
-          { error: `Token exchange failed: ${errBody}`, state: rawState },
+          { error: createSafeErrorMessage("Authentication could not be completed.", ref), state: rawState },
           targetOrigin,
         ),
         {
@@ -174,7 +301,9 @@ async function handleCallback(request, env) {
       },
     );
   } catch (err) {
-    return new Response(callbackHTML("error", { error: err.message, state: rawState }, targetOrigin), {
+    const ref = createErrorRef();
+    securityLog("oauth_callback_exception", { ref });
+    return new Response(callbackHTML("error", { error: createSafeErrorMessage("Authentication failed.", ref), state: rawState }, targetOrigin), {
       status: 500,
       headers: noStoreHeaders({ "Content-Type": "text/html" }),
     });
@@ -183,19 +312,30 @@ async function handleCallback(request, env) {
 
 async function handleConsume(request, env, origin) {
   if (!_originAllowed(origin, env.ALLOWED_ORIGIN)) {
-    return jsonResponse(
-      { error: "Origin not allowed" },
-      403,
-      origin,
-      env.ALLOWED_ORIGIN,
-      noStoreHeaders(),
-    );
+    return originDeniedResponse("/auth/consume", origin, env);
+  }
+
+  const retryAfter = await enforceRateLimit(env, "authConsume", clientFingerprint(request, origin));
+  if (retryAfter) {
+    securityLog("rate_limited", { route: "/auth/consume", origin, retryAfter });
+    return rateLimitJsonResponse(origin, env, retryAfter);
   }
 
   let body;
   try {
-    body = await request.json();
-  } catch {
+    body = await readJsonBody(request, BODY_SIZE_LIMITS.consume);
+  } catch (err) {
+    if (err instanceof RequestBodyTooLargeError) {
+      securityLog("request_body_too_large", { route: "/auth/consume", origin });
+      return jsonResponse(
+        { error: "Request body too large" },
+        413,
+        origin,
+        env.ALLOWED_ORIGIN,
+        noStoreHeaders(),
+      );
+    }
+
     return jsonResponse({ error: "Invalid JSON body" }, 400, origin, env.ALLOWED_ORIGIN, noStoreHeaders());
   }
 
@@ -246,10 +386,31 @@ async function handleConsume(request, env, origin) {
 }
 
 async function handleRefresh(request, env, origin) {
+  if (!_originAllowed(origin, env.ALLOWED_ORIGIN)) {
+    return originDeniedResponse("/auth/refresh", origin, env);
+  }
+
+  const retryAfter = await enforceRateLimit(env, "authRefresh", clientFingerprint(request, origin));
+  if (retryAfter) {
+    securityLog("rate_limited", { route: "/auth/refresh", origin, retryAfter });
+    return rateLimitJsonResponse(origin, env, retryAfter);
+  }
+
   let body;
   try {
-    body = await request.json();
-  } catch {
+    body = await readJsonBody(request, BODY_SIZE_LIMITS.refresh);
+  } catch (err) {
+    if (err instanceof RequestBodyTooLargeError) {
+      securityLog("request_body_too_large", { route: "/auth/refresh", origin });
+      return jsonResponse(
+        { error: "Request body too large" },
+        413,
+        origin,
+        env.ALLOWED_ORIGIN,
+        noStoreHeaders(),
+      );
+    }
+
     return jsonResponse({ error: "Invalid JSON body" }, 400, origin, env.ALLOWED_ORIGIN, noStoreHeaders());
   }
 
@@ -277,9 +438,10 @@ async function handleRefresh(request, env, origin) {
     });
 
     if (!tokenResp.ok) {
-      const errBody = await tokenResp.text();
+      const ref = createErrorRef();
+      securityLog("oauth_refresh_failed", { status: tokenResp.status, ref });
       return jsonResponse(
-        { error: `Token refresh failed: ${errBody}` },
+        { error: createSafeErrorMessage("Token refresh failed.", ref) },
         tokenResp.status,
         origin,
         env.ALLOWED_ORIGIN,
@@ -296,7 +458,15 @@ async function handleRefresh(request, env, origin) {
       noStoreHeaders(),
     );
   } catch (err) {
-    return jsonResponse({ error: err.message }, 500, origin, env.ALLOWED_ORIGIN, noStoreHeaders());
+    const ref = createErrorRef();
+    securityLog("oauth_refresh_exception", { ref });
+    return jsonResponse(
+      { error: createSafeErrorMessage("Token refresh failed.", ref) },
+      500,
+      origin,
+      env.ALLOWED_ORIGIN,
+      noStoreHeaders(),
+    );
   }
 }
 
@@ -402,6 +572,71 @@ export class AuthResultStore {
   }
 }
 
+export class RequestRateLimiter {
+  constructor(state) {
+    this.state = state;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname !== "/check" || request.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: noStoreHeaders({ "Content-Type": "application/json" }),
+      });
+    }
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+        status: 400,
+        headers: noStoreHeaders({ "Content-Type": "application/json" }),
+      });
+    }
+
+    const route = body.route;
+    const key = body.key;
+    const policy = RATE_LIMIT_POLICIES[route];
+    if (!policy || !key) {
+      return new Response(JSON.stringify({ error: "Invalid rate limit request" }), {
+        status: 400,
+        headers: noStoreHeaders({ "Content-Type": "application/json" }),
+      });
+    }
+
+    const storageKey = `${route}:${key}`;
+    const now = Date.now();
+    const record = (await this.state.storage.get(storageKey)) || {
+      count: 0,
+      resetAt: now + policy.windowMs,
+    };
+
+    if (record.resetAt <= now) {
+      record.count = 0;
+      record.resetAt = now + policy.windowMs;
+    }
+
+    record.count += 1;
+    await this.state.storage.put(storageKey, record);
+
+    const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000));
+    if (record.count > policy.limit) {
+      return new Response(JSON.stringify({ allowed: false, retry_after: retryAfter }), {
+        status: 429,
+        headers: noStoreHeaders({ "Content-Type": "application/json" }),
+      });
+    }
+
+    return new Response(JSON.stringify({ allowed: true, retry_after: 0 }), {
+      status: 200,
+      headers: noStoreHeaders({ "Content-Type": "application/json" }),
+    });
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -418,7 +653,7 @@ export default {
     }
 
     if (url.pathname === "/auth/url" && request.method === "GET") {
-      return handleAuthUrl(env, origin, url.searchParams.get("state") || "");
+      return handleAuthUrl(request, env, origin, url.searchParams.get("state") || "");
     }
 
     if (url.pathname === "/auth/callback" && request.method === "GET") {

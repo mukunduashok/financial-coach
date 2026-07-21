@@ -76,12 +76,12 @@
       </li>
     </ul>
     <p>
-      OAuth tokens are stored only in your browser's localStorage. You can revoke access at any
-      time via your
+      OAuth tokens are stored only inside the in-browser Credential Vault after you set a PIN and
+      unlock it. If you lose your device or forget your PIN, revoke Google access via your
       <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">
         Google Account permissions page
       </a>
-      or by disconnecting from the Settings screen.
+      , reconnect Gmail from Settings, and restore your latest encrypted Drive backup if needed.
     </p>
     <p>
       Financial Coach's use and transfer of information received from Google APIs adheres to the
@@ -94,16 +94,30 @@
     <p>
       Financial Coach supports optional AI features (chat assistant and Gmail transaction
       extraction). You may configure your own API keys for one of the following providers:
-      Groq, OpenAI (GPT), Google Gemini, Azure OpenAI, or Ollama (local). Your API keys are
-      stored only in your browser's localStorage and are never sent to Financial Coach servers.
+      Groq, OpenAI (GPT), Google Gemini, Azure OpenAI, or Ollama (local). API keys are stored only
+      inside the in-browser Credential Vault after you set a PIN and unlock it, and they are never
+      sent to Financial Coach servers.
     </p>
     <p>
       When you use an AI feature, a prompt containing relevant financial context is sent directly
-      from your browser to the AI provider you configured. Before sending, our
-      <code>maskPII()</code> function replaces account numbers, UPI IDs, card numbers, and other
-      personally identifiable information with masked placeholders. Financial Coach does not
-      intercept, log, or store any data sent to AI providers. Each provider processes your request
-      under its own privacy policy.
+      from your browser to the AI provider you configured. External providers (Groq, OpenAI,
+      Gemini, Azure OpenAI) are used only after you explicitly consent in the app; Ollama runs
+      locally on your device and does not require external sharing. Before sending, our
+      <code>maskPII()</code> function masks detected identifiers such as phone numbers, email
+      addresses, PAN, Aadhaar, UPI handles, and labelled account / card references when possible.
+      Financial Coach does not intercept, log, or store AI prompts on its own servers, but your
+      configured provider processes requests under its own privacy policy, retention, and region
+      settings.
+    </p>
+    <p>
+      AI prompts may include masked transaction descriptions, account summaries, budgets, goals,
+      and Gmail-derived content relevant to the feature you triggered (for example chat or Gmail
+      extraction). Do not paste secrets or personal details into free-form prompts unless you are
+      comfortable sharing them with your chosen provider.
+    </p>
+    <p>
+      You can withdraw external AI consent at any time from Settings. After revocation, chat and
+      Gmail extraction remain available in local / heuristic mode until you opt in again.
     </p>
 
     <h2>5. Session Security</h2>

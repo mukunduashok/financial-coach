@@ -12,6 +12,8 @@ describe("Boot Error Handling", () => {
   beforeEach(() => {
     // Reset module registry so main.js re-executes on each dynamic import
     vi.resetModules();
+    localStorage.clear();
+    sessionStorage.clear();
     appEl = document.createElement("div");
     appEl.id = "app";
     document.body.appendChild(appEl);
@@ -20,6 +22,8 @@ describe("Boot Error Handling", () => {
 
   afterEach(() => {
     appEl.remove();
+    localStorage.clear();
+    sessionStorage.clear();
     delete window.__xss;
   });
 
@@ -75,24 +79,24 @@ describe("Boot Error Handling", () => {
     appEl = document.createElement("div");
   });
 
-  it("dispatches db-ready event on successful DB init", async () => {
+  it("runs boot successfully on successful DB init", async () => {
+    const init = vi.fn().mockResolvedValue(undefined);
     vi.doMock("../../static/js/db.js", () => ({
-      DB: { init: vi.fn().mockResolvedValue(undefined) },
+      DB: { init },
     }));
-    vi.doMock("../../static/js/ai.js", () => ({}));
-    vi.doMock("../../static/js/api.js", () => ({}));
+    vi.doMock("../../static/js/ai.js", () => ({ AI: { _scrubPlaintextSecrets: vi.fn() }, AI_PROVIDERS: {} }));
+    vi.doMock("../../static/js/api.js", () => ({ API: { lockVault: vi.fn() } }));
     vi.doMock("../../static/js/app.js", () => ({}));
-    vi.doMock("../../static/js/gmail.js", () => ({}));
-
-    let dbReadyFired = false;
-    document.addEventListener("db-ready", () => {
-      dbReadyFired = true;
-    });
+    vi.doMock("../../static/js/gmail.js", () => ({ Gmail: { _scrubPlaintextSecrets: vi.fn() } }));
+    vi.doMock("../../static/js/vault.js", () => ({
+      Vault: { isConfigured: vi.fn(() => false) },
+    }));
 
     await import("../../static/js/main.js");
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(dbReadyFired).toBe(true);
+    expect(init).toHaveBeenCalledOnce();
+    expect(appEl.querySelector("p")).toBeNull();
   });
 });
 

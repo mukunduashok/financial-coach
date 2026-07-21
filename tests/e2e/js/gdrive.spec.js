@@ -21,20 +21,18 @@ async function goSettings(page) {
 	await page.waitForTimeout(300);
 }
 
-/** Sets Gmail settings in localStorage to simulate a connected account.
- *  Uses the exact field names Gmail.isConnected() checks (accessToken + refreshToken).
- */
+/** Sets up the vault and persists Gmail credentials through the real vault-backed path. */
 async function simulateGmailConnected(page, email = "test@gmail.com") {
-	await page.evaluate((e) => {
-		localStorage.setItem(
-			"fincoach-gmail-settings",
-			JSON.stringify({
-				email: e,
-				accessToken: "mock-access-token",
-				refreshToken: "mock-refresh-token",
-				tokenExpiry: Date.now() + 3_600_000,
-			}),
-		);
+	await page.evaluate(async (e) => {
+		if (!window.API.isVaultConfigured()) {
+			await window.API.setupVault("1234");
+		}
+		await window.Gmail.saveSettings({
+			email: e,
+			accessToken: "mock-access-token",
+			refreshToken: "mock-refresh-token",
+			tokenExpiry: Date.now() + 3_600_000,
+		});
 	}, email);
 }
 

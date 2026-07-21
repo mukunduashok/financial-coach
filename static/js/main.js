@@ -1,6 +1,6 @@
-import { DB } from "./db.js";
-import "./ai.js";
+import { AI } from "./ai.js";
 import { API } from "./api.js";
+import { DB } from "./db.js";
 import "./app.js";
 import {
   GMAIL_OAUTH_CALLBACK_PARAM,
@@ -72,6 +72,11 @@ async function boot() {
     }
 
     await DB.init();
+
+    if (!Vault.isConfigured()) {
+      AI?._scrubPlaintextSecrets?.();
+      Gmail?._scrubPlaintextSecrets?.();
+    }
 
     if (Vault.isConfigured()) {
       document.dispatchEvent(new Event("vault-locked"));

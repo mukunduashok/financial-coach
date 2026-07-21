@@ -60,7 +60,8 @@ function clearLocalStore() {
 }
 
 function configureGroq() {
-  AI.saveSettings({ provider: "groq", apiKey: "sk-int", model: "llama-3.3-70b-versatile" });
+  AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+  AI.grantExternalConsent("groq", "test");
 }
 
 function mockFetchSuccess(content = "AI reply") {
@@ -206,6 +207,7 @@ describe("Chat Edge Cases", () => {
 
   it("handles API returning non-JSON error body", async () => {
     AI.saveSettings({ provider: "groq", apiKey: "sk-test", model: "llama-3.3-70b-versatile" });
+    AI.grantExternalConsent("groq", "test");
     globalThis.fetch.mockResolvedValue({
       ok: false,
       status: 500,
@@ -267,12 +269,11 @@ describe("Settings Edge Cases", () => {
   });
 
   it("saves only known fields (extra fields stripped)", async () => {
-    await AI.saveSettings({ provider: "groq", apiKey: "k", model: "m", extra: "ignored" });
+    await AI.saveSettings({ provider: "groq", apiKey: "key", model: "m", extra: "ignored" });
     const raw = JSON.parse(localStore["fincoach-ai-settings"]);
     expect(raw).not.toHaveProperty("extra");
     expect(Object.keys(raw)).toEqual([
       "provider",
-      "apiKey",
       "model",
       "azureResourceName",
       "azureDeploymentName",
@@ -330,7 +331,7 @@ describe("Context Building Edge Cases", () => {
 
     const ctx = await AI._buildContext("Balance?");
     expect(ctx).toContain("2,000");
-    expect(ctx).toContain("Wallet");
+    expect(ctx).toContain("Account 1");
   });
 
   it("handles non-balance account types (credit card)", async () => {
@@ -343,7 +344,7 @@ describe("Context Building Edge Cases", () => {
 
     const ctx = await AI._buildContext("Balance?");
     // Credit card should not be in balance total
-    expect(ctx).toContain("HDFC CC (credit_card)");
+    expect(ctx).toContain("Account 1 (credit_card)");
     // Total balance should be 0 since credit_card is excluded from BALANCE_ACCOUNT_TYPES
     expect(ctx).toContain("Total Available Funds: ₹0.00");
   });
@@ -369,7 +370,7 @@ describe("Context Building Edge Cases", () => {
     mockDB.getCategories.mockResolvedValue([]);
 
     const ctx = await AI._buildContext("Goals?");
-    expect(ctx).toContain("Empty Goal");
+    expect(ctx).toContain("Goal 1");
     expect(ctx).toContain("0.0% complete");
     expect(ctx).not.toContain("NaN");
     expect(ctx).not.toContain("Infinity");
@@ -385,7 +386,7 @@ describe("Context Building Edge Cases", () => {
     mockDB.getCategories.mockResolvedValue([]);
 
     const ctx = await AI._buildContext("Balance");
-    expect(ctx).toContain("Active");
+    expect(ctx).toContain("Account 1");
   });
 
   it("limits transactions to LOOKBACK_MAX (50)", async () => {
@@ -665,7 +666,7 @@ describe("BUG-PROD-02: Credit/Debit/Deposit Accounts in AI Context", () => {
     ]);
     const ctx = await AI._buildContext("Accounts?");
     // The account line should show -8000 (negated)
-    expect(ctx).toContain("ICICI CC");
+    expect(ctx).toContain("Account 1");
     expect(ctx).toContain("-8,000.00");
     expect(ctx).toContain("(credit)");
   });

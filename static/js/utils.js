@@ -18,6 +18,17 @@ export function maskPII(text) {
 
   // Helper: mask a name — show first 2 chars, rest as asterisks (min 1)
   const maskName = (name) => name.slice(0, 2) + "*".repeat(Math.max(1, name.length - 2));
+  const maskHandle = (handle) => `${handle.slice(0, 2)}***`;
+  const maskFreeformValue = (value) =>
+    value
+      .split(/(\s+)/)
+      .map((token) => {
+        if (/^[A-Za-z][A-Za-z'.-]*$/.test(token)) return maskName(token);
+        if (/^[A-Za-z0-9._%+-]+@[A-Za-z0-9._-]+$/.test(token)) return "[REDACTED]";
+        if (/^[A-Za-z0-9*Xx-]{4,}$/.test(token)) return "[REDACTED]";
+        return token;
+      })
+      .join("");
 
   return (
     text
@@ -29,6 +40,11 @@ export function maskPII(text) {
       .replace(
         /([a-zA-Z0-9]{1,2})[a-zA-Z0-9._%+-]*@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g,
         (_m, first, domain) => `${first}**@${domain}`,
+      )
+      // UPI handles / VPAs — mask local part and mark domain as UPI handle
+      .replace(
+        /\b([a-zA-Z0-9._%+-]{2,})@([a-zA-Z][a-zA-Z0-9._-]{1,})(?!\.[a-zA-Z]{2,})\b/g,
+        (_m, handle) => `${maskHandle(handle)}@[UPI]`,
       )
       // PAN card (Indian): 5 uppercase letters, 4 digits, 1 uppercase letter
       .replace(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/g, "[PAN]")
@@ -72,6 +88,16 @@ export function maskPII(text) {
           const mLast = last ? ` ${maskName(last.trim())}` : "";
           return `${prefix}${mFirst}${mLast}`;
         },
+      )
+      // Labelled bank / source / merchant / recipient style fields
+      .replace(
+        /\b((?:Bank(?:\/Source)?|Source|Merchant|Recipient|Sender)\s*:\s*)([^,\n]+)/gi,
+        (_m, prefix, value) => `${prefix}${maskFreeformValue(value.trim())}`,
+      )
+      // Labelled account / card / reference identifiers
+      .replace(
+        /\b((?:A\/c|A\/C|Acct|Account(?:\s*(?:No|Number|#))?|Card(?:\s*(?:No|Number|#))?|UPI\s*(?:Ref|Reference)|Ref(?:erence)?\s*(?:No|Number)?|Cheque(?:\s*(?:No|Number))?)\s*[:#-]?\s*)([A-Za-z0-9*Xx-]{4,})/gi,
+        (_m, prefix) => `${prefix}[REDACTED]`,
       )
   );
 }
