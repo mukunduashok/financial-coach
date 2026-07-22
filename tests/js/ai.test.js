@@ -304,6 +304,57 @@ describe("Settings Management", () => {
     });
     expect(AI.getSettings().apiKey).toBe("legacy-key");
   });
+
+  it("unlock with only {apiKey} in the vault does not erase public settings (bug repro)", async () => {
+    // localStorage absent; vault blob only holds the secret.
+    delete localStore["fincoach-ai-settings"];
+
+    await AI.hydrateVaultSettings({ apiKey: "sk" });
+
+    // Secret survives.
+    expect(AI.getSettings().apiKey).toBe("sk");
+    // Public fields are NOT erased — remain defaults, and localStorage is not
+    // overwritten with a stale null/empty public object.
+    expect(AI.getSettings().provider).toBeNull();
+    expect(AI.getSettings().model).toBe("");
+    expect(localStore["fincoach-ai-settings"]).toBeUndefined();
+  });
+
+  it("hydrate preserves localStorage public when the vault holds only {apiKey}", async () => {
+    localStore["fincoach-ai-settings"] = JSON.stringify({
+      provider: "openai",
+      model: "gpt-4o",
+    });
+
+    await AI.hydrateVaultSettings({ apiKey: "sk" });
+
+    const stored = JSON.parse(localStore["fincoach-ai-settings"]);
+    expect(stored.provider).toBe("openai");
+    expect(stored.model).toBe("gpt-4o");
+    const s = AI.getSettings();
+    expect(s.provider).toBe("openai");
+    expect(s.model).toBe("gpt-4o");
+    expect(s.apiKey).toBe("sk");
+  });
+
+  it("migrates legacy vault-stored public settings into localStorage", async () => {
+    delete localStore["fincoach-ai-settings"];
+
+    await AI.hydrateVaultSettings({
+      provider: "groq",
+      model: "llama-3.3-70b-versatile",
+      apiKey: "sk",
+    });
+
+    const stored = JSON.parse(localStore["fincoach-ai-settings"]);
+    expect(stored.provider).toBe("groq");
+    expect(stored.model).toBe("llama-3.3-70b-versatile");
+    expect(Vault.saveAISettings).toHaveBeenCalledWith({ apiKey: "sk" });
+    const s = AI.getSettings();
+    expect(s.provider).toBe("groq");
+    expect(s.model).toBe("llama-3.3-70b-versatile");
+    expect(s.apiKey).toBe("sk");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1095,19 +1146,34 @@ describe("Vault / _decrypted cache", () => {
     Vault.isUnlocked.mockReturnValue(false);
   });
 
-  it("setDecrypted(settings) → getSettings() returns those settings instead of localStorage", () => {
-    localStore["fincoach-ai-settings"] = JSON.stringify({ provider: "openai", apiKey: "from-ls" });
-    AI.setDecrypted({ provider: "groq", apiKey: "from-vault", model: "llama-3.3-70b-versatile",
-      azureResourceName: "", azureDeploymentName: "", azureApiVersion: "", ollamaBaseUrl: "" });
+  it("setDecrypted supplies only the secret apiKey; public fields come from localStorage", () => {
+    localStore["fincoach-ai-settings"] = JSON.stringify({
+      provider: "groq",
+      model: "llama-3.3-70b-versatile",
+    });
+    AI.setDecrypted({ apiKey: "from-vault" });
     const s = AI.getSettings();
     expect(s.provider).toBe("groq");
+    expect(s.model).toBe("llama-3.3-70b-versatile");
     expect(s.apiKey).toBe("from-vault");
   });
 
+  it("empty decrypted public fields do not clobber good localStorage public settings", () => {
+    localStore["fincoach-ai-settings"] = JSON.stringify({
+      provider: "groq",
+      model: "llama-3.3-70b-versatile",
+    });
+    // Simulate an unlock that only seeds the secret in the decrypted cache.
+    AI.setDecrypted({ apiKey: "sk" });
+    const s = AI.getSettings();
+    expect(s.provider).toBe("groq");
+    expect(s.model).toBe("llama-3.3-70b-versatile");
+    expect(s.apiKey).toBe("sk");
+  });
+
   it("clearDecrypted() → getSettings() reads from localStorage again", () => {
-    AI.setDecrypted({ provider: "groq", apiKey: "from-vault", model: "",
-      azureResourceName: "", azureDeploymentName: "", azureApiVersion: "", ollamaBaseUrl: "" });
-    localStore["fincoach-ai-settings"] = JSON.stringify({ provider: "openai", apiKey: "from-ls" });
+    AI.setDecrypted({ apiKey: "from-vault" });
+    localStore["fincoach-ai-settings"] = JSON.stringify({ provider: "openai" });
     AI.clearDecrypted();
     const s = AI.getSettings();
     expect(s.provider).toBe("openai");

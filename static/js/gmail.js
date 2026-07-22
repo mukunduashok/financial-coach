@@ -240,11 +240,23 @@ export const Gmail = {
     const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
     const vaultPublic = this._normalizePublicSettings(vaultSettings || {});
     const plaintext = this.getLegacyPlaintextSettings();
+    // Field-wise merge: keep the existing non-empty value, only fall back to the
+    // vault-supplied value when the local one is empty. Never let empty vault
+    // fields clobber good localStorage values.
     const mergedPublic = {
       email: currentPublic.email || vaultPublic.email || "",
       sub: currentPublic.sub || vaultPublic.sub || "",
     };
-    this._persistPublicSettings(mergedPublic);
+    // Only persist when the merge actually adds a real (non-empty) value that
+    // differs from what is already stored. This prevents an all-empty public
+    // object from overwriting localStorage with null/empty public settings.
+    const publicChanged = Object.keys(mergedPublic).some(
+      (key) => (mergedPublic[key] || "") !== (currentPublic[key] || ""),
+    );
+    const publicHasValue = Object.values(mergedPublic).some((value) => !!value);
+    if (publicChanged && publicHasValue) {
+      this._persistPublicSettings(mergedPublic);
+    }
 
     const secretFromVault = this._normalizeSecretSettings(vaultSettings || {});
     const secretToPersist = this._hasSecretSettings(secretFromVault)
@@ -259,7 +271,7 @@ export const Gmail = {
       if (!this._hasSecretSettings(secretFromVault) || needsVaultRewrite) {
         await Vault.saveGmailSettings(secretToPersist);
       }
-      this.setDecrypted({ ...mergedPublic, ...secretToPersist });
+      this.setDecrypted({ ...secretToPersist });
     } else {
       this.clearDecrypted();
     }
@@ -268,15 +280,16 @@ export const Gmail = {
   },
 
   getSettings() {
+    // Public (non-secret) settings come only from localStorage; the decrypted
+    // vault cache supplies only the secret tokens. This prevents empty decrypted
+    // public fields from clobbering good localStorage values on unlock.
     const publicSettings = this._normalizePublicSettings(this._readStoredSettings());
-    const decryptedPublic = this._decrypted ? this._normalizePublicSettings(this._decrypted) : {};
-    const decryptedSecret = this._decrypted ? this._normalizeSecretSettings(this._decrypted) : {};
+    const secret = this._normalizeSecretSettings(this._decrypted || {});
     return {
       ...GMAIL_PUBLIC_DEFAULTS,
       ...publicSettings,
-      ...decryptedPublic,
       ...GMAIL_SECRET_DEFAULTS,
-      ...decryptedSecret,
+      ...secret,
     };
   },
 

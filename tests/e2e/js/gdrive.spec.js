@@ -441,3 +441,84 @@ test.describe("GDrive Settings — API key backup opt-in", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// 9. Restore settings — provider/model survive & backup is not poisoned
+//
+// Regression for the bug where AI provider/model (public settings) could be
+// lost or overwritten with null after a vault unlock, poisoning the next Drive
+// backup. GDrive._restoreSettings must merge a backup envelope into the real
+// AI settings, and a subsequent restore of the SAME backup must be a no-op that
+// never overwrites the now-populated public settings with null.
+// ---------------------------------------------------------------------------
+test.describe("GDrive Settings — restore does not poison AI settings", () => {
+	test("restore populates provider/model/key and re-restore is a no-op (no null overwrite)", async ({
+		pwaPage,
+	}) => {
+		const page = pwaPage;
+		// Vault set up + unlocked so a restored API key can be persisted.
+		await page.evaluate(async () => {
+			await window.API.setupVault("1234");
+		});
+		const result = await page.evaluate(async () => {
+			const { GDrive } = await import("/js/gdrive.js");
+			localStorage.setItem("fincoach-gdrive-backup-api-key", "true");
+			const envelope = {
+				settings: {
+					provider: "groq",
+					model: "llama-3.1-8b-instant",
+					apiKey: "sk-restored",
+				},
+			};
+			await GDrive._restoreSettings(envelope);
+			const afterFirst = window.AI.getSettings();
+			// Simulate a later auto-sync restoring the SAME backup — must not wipe
+			// the populated public settings back to null (backup-poison guard).
+			await GDrive._restoreSettings(envelope);
+			const afterSecond = window.AI.getSettings();
+			return {
+				afterFirst,
+				afterSecond,
+				stored: localStorage.getItem("fincoach-ai-settings"),
+			};
+		});
+		expect(result.afterFirst.provider).toBe("groq");
+		expect(result.afterFirst.model).toBe("llama-3.1-8b-instant");
+		expect(result.afterFirst.apiKey).toBe("sk-restored");
+		expect(result.afterSecond.provider).toBe("groq");
+		expect(result.afterSecond.model).toBe("llama-3.1-8b-instant");
+		expect(result.afterSecond.apiKey).toBe("sk-restored");
+		const stored = JSON.parse(result.stored);
+		expect(stored.provider).toBe("groq");
+		expect(stored.model).toBe("llama-3.1-8b-instant");
+		// Secret must never be written to plaintext localStorage.
+		expect(stored.apiKey).toBeUndefined();
+	});
+
+	test("restore does not overwrite existing local provider/model with backup values", async ({
+		pwaPage,
+	}) => {
+		const page = pwaPage;
+		await page.evaluate(async () => {
+			await window.API.setupVault("1234");
+			// Local settings already configured with a different provider.
+			await window.AI.saveSettings({
+				provider: "openai",
+				model: "gpt-4o-mini",
+				apiKey: "sk-local",
+			});
+		});
+		const settings = await page.evaluate(async () => {
+			const { GDrive } = await import("/js/gdrive.js");
+			const envelope = {
+				settings: { provider: "groq", model: "llama-3.1-8b-instant", apiKey: "sk-backup" },
+			};
+			await GDrive._restoreSettings(envelope);
+			return window.AI.getSettings();
+		});
+		// Local values win over the backup (last-writer / local-first merge).
+		expect(settings.provider).toBe("openai");
+		expect(settings.model).toBe("gpt-4o-mini");
+		expect(settings.apiKey).toBe("sk-local");
+	});
+});
+

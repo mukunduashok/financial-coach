@@ -181,6 +181,40 @@ describe("Gmail Settings", () => {
     });
     expect(Gmail.getSettings().accessToken).toBe("legacy-access");
   });
+
+  it("unlock preserves email/sub public settings when the vault holds only secret tokens", async () => {
+    localStorageData["fincoach-gmail-settings"] = JSON.stringify({
+      email: "user@example.com",
+      sub: "sub-123",
+    });
+
+    await Gmail.hydrateVaultSettings({
+      accessToken: "tok",
+      refreshToken: "ref",
+      tokenExpiry: 999,
+    });
+
+    const stored = JSON.parse(localStorageData["fincoach-gmail-settings"]);
+    expect(stored.email).toBe("user@example.com");
+    expect(stored.sub).toBe("sub-123");
+    const s = Gmail.getSettings();
+    expect(s.email).toBe("user@example.com");
+    expect(s.sub).toBe("sub-123");
+    expect(s.accessToken).toBe("tok");
+  });
+
+  it("setDecrypted supplies only secret tokens; email/sub come from localStorage", () => {
+    localStorageData["fincoach-gmail-settings"] = JSON.stringify({
+      email: "user@example.com",
+      sub: "sub-123",
+    });
+    Gmail.setDecrypted({ accessToken: "tok", refreshToken: "ref", tokenExpiry: 999 });
+    const s = Gmail.getSettings();
+    expect(s.email).toBe("user@example.com");
+    expect(s.sub).toBe("sub-123");
+    expect(s.accessToken).toBe("tok");
+    Gmail.clearDecrypted();
+  });
 });
 
 // ===========================================================================
@@ -1160,8 +1194,8 @@ describe("LLM Call", () => {
 
   it("_callLLM throws for unknown provider", async () => {
     const { AI } = await import("../../static/js/ai.js");
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({ provider: "nonexistent" });
     AI.setDecrypted({
-      provider: "nonexistent",
       apiKey: "x",
     });
     await expect(Gmail._callLLM("test prompt")).rejects.toThrow("Unknown AI provider");
@@ -1170,10 +1204,12 @@ describe("LLM Call", () => {
 
   it("_callLLM sends correct request to Groq", async () => {
     const { AI } = await import("../../static/js/ai.js");
-    AI.setDecrypted({
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({
       provider: "groq",
-      apiKey: "test-key",
       model: "test-model",
+    });
+    AI.setDecrypted({
+      apiKey: "test-key",
     });
 
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -1196,16 +1232,14 @@ describe("LLM Call", () => {
   });
 
   it("_callLLM uses vault-decrypted settings when vault is unlocked", async () => {
-    // Simulate vault unlocked: AI._decrypted set, localStorage empty
+    // Simulate vault unlocked: public provider/model in localStorage, secret in _decrypted.
     const { AI } = await import("../../static/js/ai.js");
-    AI.setDecrypted({
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({
       provider: "groq",
-      apiKey: "vault-key",
       model: "test-model",
-      azureResourceName: "",
-      azureDeploymentName: "",
-      azureApiVersion: "",
-      ollamaBaseUrl: "",
+    });
+    AI.setDecrypted({
+      apiKey: "vault-key",
     });
 
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -1226,8 +1260,8 @@ describe("LLM Call", () => {
 
   it("_callLLM uses default model when none specified", async () => {
     const { AI } = await import("../../static/js/ai.js");
+    localStorageData["fincoach-ai-settings"] = JSON.stringify({ provider: "groq" });
     AI.setDecrypted({
-      provider: "groq",
       apiKey: "test-key",
     });
 

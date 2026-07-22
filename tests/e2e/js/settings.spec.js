@@ -140,6 +140,39 @@ test.describe("TestSettingsPage", () => {
     expect(stored).toMatchObject({ provider: "groq" });
     expect(stored.apiKey).toBeUndefined();
   });
+
+  test("save provider+model+key → lock → reload → unlock → Settings shows same provider/model", async ({
+    pwaPage,
+  }) => {
+    const page = pwaPage;
+    // Set up the vault (PIN) so the secret API key can be saved.
+    await page.evaluate(async () => {
+      await window.API.setupVault("1234");
+    });
+    // Re-render Settings so it reflects the unlocked vault state.
+    await page.goto("/#/");
+    await goSettings(page);
+    // Configure the AI provider + model + API key via the Settings form.
+    await page.selectOption("#ai-provider", "groq");
+    await page.waitForTimeout(200);
+    await page.fill("#ai-model", "llama-3.1-8b-instant");
+    await page.fill("#ai-api-key", "sk-live-groq-key");
+    await page.locator("button:has-text('Save Settings')").click();
+    await expect(page.locator("#settings-status")).toContainText("saved", { timeout: 5_000 });
+    // Lock the vault and reload to a locked state.
+    await page.evaluate(() => window.API.lockVault());
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+    // Unlock with the PIN.
+    await page.fill("#vault-unlock-passphrase", "1234");
+    await page.click('[data-action="unlock-vault"]');
+    await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
+    // Settings must show the saved provider, model, and key (not lost on unlock).
+    await goSettings(page);
+    await expect(page.locator("#ai-provider")).toHaveValue("groq");
+    await expect(page.locator("#ai-model")).toHaveValue("llama-3.1-8b-instant");
+    await expect(page.locator("#ai-api-key")).toHaveValue("sk-live-groq-key");
+  });
 });
 
 test.describe("TestSettingsNavigation", () => {

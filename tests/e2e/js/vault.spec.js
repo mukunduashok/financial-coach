@@ -256,3 +256,165 @@ test.describe("Vault unlock screen", () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Group 3 – AI public settings survive vault unlock
+//
+// Regression coverage for the bug where the AI Provider/Model (public,
+// non-secret settings kept in localStorage `fincoach-ai-settings`) vanished
+// after the credential vault was unlocked, while the API key (secret, encrypted
+// in `fincoach-vault-ai`) survived. Public settings must come from localStorage;
+// the decrypted vault cache supplies only the apiKey and must never clobber
+// good localStorage public values.
+// ---------------------------------------------------------------------------
+const AI_SETTINGS_LS_KEY = "fincoach-ai-settings";
+
+async function setupVaultAndSaveAI(page, { provider, model, apiKey, pin = "1234" }) {
+	await page.evaluate(
+		async ({ provider, model, apiKey, pin }) => {
+			await window.API.setupVault(pin);
+			await window.AI.saveSettings({ provider, model, apiKey });
+		},
+		{ provider, model, apiKey, pin },
+	);
+}
+
+async function lockAndReload(page) {
+	await page.evaluate(() => window.API.lockVault());
+	await page.reload({ waitUntil: "domcontentloaded" });
+}
+
+async function unlockViaScreen(page, pin = "1234") {
+	await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+	await page.fill("#vault-unlock-passphrase", pin);
+	await page.click('[data-action="unlock-vault"]');
+	await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
+}
+
+// Hash-based navigation (no full reload — a reload would re-lock the in-memory vault).
+async function goSettingsHash(page) {
+	await page.evaluate(() => {
+		window.location.hash = "#/settings";
+	});
+	await page.waitForSelector("#ai-provider", { timeout: 10_000 });
+}
+
+test.describe("AI settings survive vault unlock", () => {
+	test("provider + model + key persist through lock → reload → unlock (bug repro)", async ({
+		pwaPage,
+	}) => {
+		const page = pwaPage;
+		await setupVaultAndSaveAI(page, {
+			provider: "groq",
+			model: "llama-3.1-8b-instant",
+			apiKey: "sk-groq-123",
+		});
+		await lockAndReload(page);
+		await unlockViaScreen(page, "1234");
+		await goSettingsHash(page);
+		// Primary user-visible assertion: provider dropdown + model input restored.
+		await expect(page.locator("#ai-provider")).toHaveValue("groq");
+		await expect(page.locator("#ai-model")).toHaveValue("llama-3.1-8b-instant");
+		// The secret key is present and usable after unlock.
+		await expect(page.locator("#ai-api-key")).toHaveValue("sk-groq-123");
+	});
+
+	test("empty localStorage + vault-only {apiKey} does not poison settings on unlock", async ({
+		pwaPage,
+	}) => {
+		const page = pwaPage;
+		await setupVaultAndSaveAI(page, {
+			provider: "groq",
+			model: "llama-3.1-8b-instant",
+			apiKey: "sk-groq-123",
+		});
+		// Simulate the exact broken cross-device state: public localStorage lost,
+		// encrypted vault {apiKey} intact.
+		await page.evaluate((k) => localStorage.removeItem(k), AI_SETTINGS_LS_KEY);
+		await lockAndReload(page);
+		await unlockViaScreen(page, "1234");
+		// The API key remains usable from the vault.
+		const apiKey = await page.evaluate(() => window.AI.getSettings().apiKey);
+		expect(apiKey).toBe("sk-groq-123");
+		// localStorage was NOT overwritten with an all-null public object — nothing
+		// poisonous to feed into a subsequent GDrive backup.
+		const raw = await page.evaluate((k) => localStorage.getItem(k), AI_SETTINGS_LS_KEY);
+		expect(raw).toBeNull();
+		// getSettings returns clean public defaults (no persisted null poisoning).
+		const settings = await page.evaluate(() => window.AI.getSettings());
+		expect(settings.provider).toBeNull();
+		expect(settings.model).toBe("");
+	});
+
+	test("provider/model/key survive after changing the PIN", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await setupVaultAndSaveAI(page, {
+			provider: "openai",
+			model: "gpt-4o-mini",
+			apiKey: "sk-openai-xyz",
+		});
+		await page.evaluate(async () => {
+			await window.API.changeVaultPassphrase("1234", "5678");
+		});
+		await lockAndReload(page);
+		await unlockViaScreen(page, "5678");
+		await goSettingsHash(page);
+		await expect(page.locator("#ai-provider")).toHaveValue("openai");
+		await expect(page.locator("#ai-model")).toHaveValue("gpt-4o-mini");
+		await expect(page.locator("#ai-api-key")).toHaveValue("sk-openai-xyz");
+	});
+
+	test("biometric unlock preserves provider/model/key", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await installBiometricMocks(page);
+		await setupVaultAndSaveAI(page, {
+			provider: "groq",
+			model: "llama-3.1-8b-instant",
+			apiKey: "sk-bio-1",
+		});
+		await page.evaluate(async () => {
+			await window.API.setupBiometric("1234");
+		});
+		await page.evaluate(() => window.API.lockVault());
+		await page.reload({ waitUntil: "domcontentloaded" });
+		// The unlock screen auto-triggers biometric unlock when enabled. Poll the
+		// hydrated settings directly rather than racing the overlay's removal.
+		await page.waitForFunction(
+			() => window.AI?.getSettings?.().apiKey === "sk-bio-1",
+			{ timeout: 15_000 },
+		);
+		const s = await page.evaluate(() => window.AI.getSettings());
+		expect(s.provider).toBe("groq");
+		expect(s.model).toBe("llama-3.1-8b-instant");
+		expect(s.apiKey).toBe("sk-bio-1");
+	});
+
+	test("session-expiry wipe clears AI + vault settings and shows setup", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await setupVaultAndSaveAI(page, {
+			provider: "groq",
+			model: "llama-3.1-8b-instant",
+			apiKey: "sk-wipe",
+		});
+		// Force an expired session: last activity far in the past, device not trusted.
+		await page.evaluate(() => {
+			localStorage.setItem("fincoach-session-last-activity", "1");
+			localStorage.removeItem("fincoach-trusted-device");
+		});
+		await page.reload({ waitUntil: "domcontentloaded" });
+		await page.waitForTimeout(1_000);
+		// Everything sensitive is wiped — no half-erased state where the key lingers.
+		const state = await page.evaluate(() => ({
+			ai: localStorage.getItem("fincoach-ai-settings"),
+			vaultAI: localStorage.getItem("fincoach-vault-ai"),
+			salt: localStorage.getItem("fincoach-vault-salt"),
+			onboarded: localStorage.getItem("fincoach-onboarded"),
+		}));
+		expect(state.ai).toBeNull();
+		expect(state.vaultAI).toBeNull();
+		expect(state.salt).toBeNull();
+		expect(state.onboarded).toBeNull();
+		// App is not stuck on a locked/unlock overlay.
+		await expect(page.locator("#vault-unlock-screen")).toHaveCount(0);
+	});
+});

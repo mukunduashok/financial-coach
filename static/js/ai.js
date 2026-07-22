@@ -341,6 +341,9 @@ export const AI = {
     const currentPublic = this._normalizePublicSettings(this._readStoredSettings());
     const vaultPublic = this._normalizePublicSettings(vaultSettings || {});
     const plaintext = this.getLegacyPlaintextSettings();
+    // Field-wise merge: keep the existing non-empty value, only fall back to the
+    // vault-supplied value when the local one is empty. Never let empty vault
+    // fields clobber good localStorage values.
     const mergedPublic = {
       provider: currentPublic.provider || vaultPublic.provider || null,
       model: currentPublic.model || vaultPublic.model || "",
@@ -350,7 +353,17 @@ export const AI = {
       azureApiVersion: currentPublic.azureApiVersion || vaultPublic.azureApiVersion || "",
       ollamaBaseUrl: currentPublic.ollamaBaseUrl || vaultPublic.ollamaBaseUrl || "",
     };
-    this._persistPublicSettings(mergedPublic);
+    // Only persist when the merge actually adds a real (non-empty) value that
+    // differs from what is already stored. This prevents an all-empty public
+    // object (localStorage absent + vault holds only {apiKey}) from overwriting
+    // localStorage with null/empty public settings.
+    const publicChanged = Object.keys(mergedPublic).some(
+      (key) => (mergedPublic[key] || "") !== (currentPublic[key] || ""),
+    );
+    const publicHasValue = Object.values(mergedPublic).some((value) => !!value);
+    if (publicChanged && publicHasValue) {
+      this._persistPublicSettings(mergedPublic);
+    }
 
     const secretFromVault = this._normalizeSecretSettings(vaultSettings || {});
     const secretToPersist = secretFromVault.apiKey || plaintext.apiKey || "";
@@ -368,7 +381,7 @@ export const AI = {
       if (!secretFromVault.apiKey || needsVaultRewrite) {
         await Vault.saveAISettings({ apiKey: secretToPersist });
       }
-      this.setDecrypted({ ...mergedPublic, apiKey: secretToPersist });
+      this.setDecrypted({ apiKey: secretToPersist });
     } else {
       this.clearDecrypted();
     }
@@ -377,15 +390,15 @@ export const AI = {
   },
 
   getSettings() {
+    // Public (non-secret) settings come only from localStorage; the decrypted
+    // vault cache supplies only the secret apiKey. This prevents empty decrypted
+    // public fields from clobbering good localStorage values on unlock.
     const publicSettings = this._normalizePublicSettings(this._readStoredSettings());
-    const decryptedPublic = this._decrypted ? this._normalizePublicSettings(this._decrypted) : {};
-    const decryptedSecret = this._decrypted ? this._normalizeSecretSettings(this._decrypted) : {};
     return {
       ...AI_PUBLIC_DEFAULTS,
       ...publicSettings,
-      ...decryptedPublic,
       ...AI_SECRET_DEFAULTS,
-      ...decryptedSecret,
+      apiKey: this._decrypted?.apiKey || "",
     };
   },
 
