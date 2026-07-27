@@ -227,6 +227,55 @@ Returns `204 No Content` on success.
 
 ---
 
+### Get Comments on a Work Item
+
+Always fetch comments when reading a work item to get the full picture — comments often contain status notes, accepted-risk decisions, duplicate markers, or resolution context that is not in the description.
+
+```bash
+GET /api/v1/workspaces/fincoach/projects/149b50b7-96ae-4caa-8e46-b41d0a3869d6/issues/{issue_id}/comments/
+```
+
+Shell example:
+```bash
+curl -s \
+  -H "X-API-Key: $PLANE_TOKEN" \
+  "https://api.plane.so/api/v1/workspaces/fincoach/projects/149b50b7-96ae-4caa-8e46-b41d0a3869d6/issues/969db991-1671-43ec-95b1-405902cce239/comments/"
+```
+
+Returns a `results` array of comment objects. Each comment has:
+- `id` — comment UUID
+- `comment_html` — HTML-formatted comment body
+- `actor_detail.display_name` — who posted it
+- `created_at` — timestamp
+
+### Add a Comment to a Work Item
+
+```bash
+POST /api/v1/workspaces/fincoach/projects/149b50b7-96ae-4caa-8e46-b41d0a3869d6/issues/{issue_id}/comments/
+Content-Type: application/json
+X-API-Key: $PLANE_TOKEN
+```
+
+Body:
+```json
+{
+  "comment_html": "<p>Your comment text here.</p>"
+}
+```
+
+Shell example:
+```bash
+curl -s -X POST \
+  -H "X-API-Key: $PLANE_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"comment_html": "<p>Fixed in commit abc123.</p>"}' \
+  "https://api.plane.so/api/v1/workspaces/fincoach/projects/149b50b7-96ae-4caa-8e46-b41d0a3869d6/issues/{issue_id}/comments/"
+```
+
+Returns `201 Created` with the new comment object.
+
+---
+
 ## Labels
 
 ### List Labels

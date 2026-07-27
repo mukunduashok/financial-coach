@@ -187,3 +187,26 @@ DB `transaction_id` for Gmail rows is always `"gmail_<gmail_message_id>"` to avo
 
 - **Gmail transactions**: `#edit-desc` starts empty; LLM-extracted `description` is shown as placeholder text. Saving with an empty Notes field preserves the original `description` in the DB.
 - **Manual transactions**: `#edit-desc` is pre-filled with `description` value as before.
+
+## Reading Plane.so Tickets — Always Check Comments
+
+When reading any Plane.so work item (for requirements, bug status, or duplicate checks), **always fetch its comments** in addition to the title and description. Comments frequently contain:
+- Accepted-risk decisions with rationale
+- Duplicate or superseded-by notes
+- Resolution context not captured in the description field
+
+Use the plane agent or the comments endpoint directly: `GET /issues/{issue_id}/comments/`
+
+## Security Issue Tracking (Plane.so)
+
+Whenever a security vulnerability, compliance concern, or access control issue is discovered during development, code review, or automated scanning:
+
+1. **Check for duplicates** — list Plane.so work items with the `security` label and state ≠ Done before logging.
+2. **Create a Plane.so work item** (via the `plane` subagent) with:
+   - The **`security`** label applied
+   - Priority: High for critical/high severity, Medium for medium, Low for low
+   - State: Backlog
+3. **Title format**: `SEC-<SEVERITY>-<N>: <Short description>`
+4. **Description** must include: affected file(s) + line numbers, description of the vulnerability, OWASP category, and a suggested fix.
+
+The security label color is `#EB144C`. Only the **tester agent** creates these work items.

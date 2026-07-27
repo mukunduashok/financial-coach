@@ -98,7 +98,7 @@ Write tests for newly implemented code based on a plan and implementation summar
 7. **Run unit tests**: `make test-unit`
 8. **Run E2E tests** (if UI changed): `make test-e2e`
 9. **Fix failures**: Read error output, fix the test (or report as production bug).
-10. **Log bugs in plane.so** — if production code is broken, create a work item via the `plane` agent. Include title, description of expected vs actual, reproduction steps, severity (priority), and the related task name.
+10. **Log bugs in plane.so** — if production code is broken, create a work item via the `plane` agent. Include title, description of expected vs actual, reproduction steps, severity (priority), and the related task name. **If the bug is security-related** (XSS, injection, insecure storage, auth weakness, CSP misconfiguration, data exposure, or any OWASP Top 10 category), you MUST also apply the `security` label to the work item. Before logging, filter open work items with label `security` and state ≠ Done to avoid duplicates.
 
 ### Mode 2: Ad-Hoc Regression (invoked directly by user)
 

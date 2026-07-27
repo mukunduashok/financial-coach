@@ -188,6 +188,29 @@ Each plane.so work item MUST follow this format:
 - The **orchestrator** reads plane.so work items to determine loop state
 - Move resolved items to Done (for history) — do not delete them
 
+### Reading Work Items — Always Check Comments
+
+When reading any Plane.so work item (to understand a requirement, check a bug's status, or do a duplicate scan), you MUST also fetch its comments. Comments often contain:
+- Accepted-risk decisions and their rationale
+- Duplicate or superseded-by markers
+- Resolution context (e.g., "fixed in commit X")
+- Status changes with explanations not captured in the description
+
+Fetch comments via: `GET /issues/{issue_id}/comments/` (see plane-so SKILL.md for the full endpoint).
+
+### Security Issues — Mandatory Label
+
+Any plane.so work item that involves a security vulnerability, compliance concern, or access control issue MUST include the **`security`** label when created. This applies to:
+- OWASP Top 10 vulnerabilities (XSS, SQL injection, insecure storage, broken auth, etc.)
+- Authentication or authorization weaknesses
+- Sensitive data exposure (API keys, PII, tokens in logs or URL params)
+- Cryptographic weaknesses or insecure algorithms
+- CSP / security header misconfigurations
+- OAuth / CSRF / open redirect issues
+- Any issue that could compromise user data or the app's security posture
+
+The `security` label exists in the FINCO project on Plane.so (color `#EB144C`). Before logging a new security issue, filter open work items with label `security` and state ≠ Done to check for duplicates.
+
 ### When Working on JavaScript (`static/**`)
 
 - All files use ES Modules (`import`/`export`)

@@ -121,3 +121,21 @@ localStorage.removeItem('fincoach-trusted-device');
 - **Developer agent**: Implements code + writes **unit tests**. In fix mode, checks assigned plane.so work items for open bugs. Runs lint and unit tests before reporting.
 - **Tester agent**: Writes **functional, integration, UI, and E2E tests**. MUST write E2E tests for any UI/route changes. Creates plane.so work items for implementation bugs. Runs full test suite and ensures zero regressions. **After every feature/fix, updates agent files** (features-map, tester.agent.md, AGENTS.md, CLAUDE.md) to reflect the current project state.
 - **Orchestrator agent**: Coordinates the workflow including the **bug-fix loop** (max 2 iterations). When delegating to the tester, specifies which test types are expected (E2E for UI changes, integration for API wiring, functional for new modules). Checks plane.so work items after testing. Escalates to user if bugs persist after 2 loops.
+
+## Reading Plane.so Tickets — Always Check Comments
+
+When fetching a work item from Plane.so (for requirements, bug status, or duplicate checks), also fetch its **comments**. Comments frequently contain accepted-risk decisions, duplicate markers, resolution notes, or status rationale that is not in the description field.
+
+## Security Issue Tracking
+
+Whenever any agent (tester, orchestrator, or developer) identifies a security vulnerability or compliance concern:
+
+1. **Check for duplicates first** — filter Plane.so work items with the `security` label and state ≠ Done.
+2. **Create a new work item** if not already tracked, with:
+   - The **`security`** label applied (color `#EB144C`)
+   - Priority matching the severity: `critical/high` → High, `medium` → Medium, `low` → Low
+   - State: Backlog
+3. **Title format**: `SEC-<SEVERITY>-<N>: <Short description>` (e.g., `SEC-HIGH-1: Gemini API key in URL`)
+4. **Description** must include: affected file(s) and line numbers, expected vs actual behavior, OWASP category, and suggested fix.
+
+**Rule**: Only the tester agent creates Plane.so work items (including security ones). The developer and orchestrator read but do not create work items.

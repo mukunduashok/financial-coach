@@ -17,7 +17,7 @@ You do NOT write code or tests yourself. You delegate to specialist subagents an
 
 If the user references a plane.so work item (e.g. "work on FINCO-8", "implement the work item", or provides a sequence ID like `FINCO-8`), you MUST fetch its full details first before planning:
 
-1. Invoke the **plane** subagent with: "Get work item `<ID>` — return its full title, description, priority, state, and due date."
+1. Invoke the **plane** subagent with: "Get work item `<ID>` — return its full title, description, priority, state, due date, and **all comments** (fetch the comments endpoint too). Comments often contain accepted-risk notes, duplicate markers, or resolution context not visible in the description."
 2. The plane agent will return the work item details.
 3. Use the returned details as the requirement for Phase 1.
 4. Show the user a brief summary of the work item before proceeding.
