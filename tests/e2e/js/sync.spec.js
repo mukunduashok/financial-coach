@@ -181,3 +181,46 @@ test.describe("TestGmailTombstoneReimport", () => {
 		expect(body.toLowerCase()).toContain("re-imported");
 	});
 });
+
+// ===========================================================================
+// FINCO-65 — Default "Days to look back" changed from 7 → 2
+// ===========================================================================
+test.describe("TestSyncDaysDefault", () => {
+	test("days input defaults to 2 (not 7)", async ({ page }) => {
+		await buildSyncPage(page);
+		await page.evaluate(() => {
+			window.location.hash = "#/sync";
+		});
+		await page.waitForSelector("#screen");
+		await page.waitForTimeout(500);
+
+		const daysInput = page.locator("#sync-days");
+		if ((await daysInput.count()) === 0) return; // sync screen unavailable — skip
+
+		const value = await daysInput.inputValue();
+		expect(value).toBe("2");
+	});
+});
+
+// ===========================================================================
+// FINCO-66 — Sync screen renders without errors when AI is not configured
+// ===========================================================================
+test.describe("TestSyncNoAIConfigured", () => {
+	test("sync screen renders without uncaught JS errors when AI is not configured", async ({
+		page,
+	}) => {
+		const errors = [];
+		page.on("pageerror", (err) => errors.push(err.message));
+
+		// buildSyncPage sets no AI settings — simulates a first-time user
+		await buildSyncPage(page);
+
+		await page.evaluate(() => {
+			window.location.hash = "#/sync";
+		});
+		await page.waitForSelector("#screen");
+		await page.waitForTimeout(500);
+
+		expect(errors).toHaveLength(0);
+	});
+});

@@ -418,3 +418,31 @@ test.describe("AI settings survive vault unlock", () => {
 		await expect(page.locator("#vault-unlock-screen")).toHaveCount(0);
 	});
 });
+
+// ===========================================================================
+// FINCO-67 — Auto-focus PIN input on vault unlock screen
+// ===========================================================================
+test.describe("Vault unlock screen auto-focus", () => {
+	test("PIN input is auto-focused when unlock screen appears", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await setupAndLockVault(page, "1234");
+		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+
+		const isFocused = await page
+			.locator("#vault-unlock-passphrase")
+			.evaluate((el) => el === document.activeElement);
+		expect(isFocused).toBe(true);
+	});
+
+	test("pressing Enter with correct PIN unlocks vault", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await setupAndLockVault(page, "1234");
+		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+
+		await page.fill("#vault-unlock-passphrase", "1234");
+		await page.press("#vault-unlock-passphrase", "Enter");
+
+		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
+		await expect(page.locator("#app")).toBeVisible({ timeout: 5_000 });
+	});
+});

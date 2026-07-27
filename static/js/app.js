@@ -1408,7 +1408,7 @@ async function renderTransactions() {
               }</span>
               <span class="tag-filter-arrow">▾</span>
             </button>
-            <div class="tag-filter-menu" id="f-tags-menu" style="display:none">
+            <div class="tag-filter-menu hidden" id="f-tags-menu">
               ${allTags.map((t) => `<label class="tag-filter-option"><input type="checkbox" value="${t.id}" ${txFilterState.tag_ids.includes(t.id) ? "checked" : ""}> #${escapeHtml(t.name)}</label>`).join("")}
             </div>
           </div>
@@ -1498,12 +1498,12 @@ async function renderTransactions() {
     if (tagsBtn && tagsMenu) {
       tagsBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        tagsMenu.style.display = tagsMenu.style.display === "none" ? "block" : "none";
+        tagsMenu.classList.toggle("hidden");
       });
       tagsMenu.addEventListener("change", applyFilters);
       document.addEventListener("click", function closeTagsMenu(e) {
         if (!tagsBtn.contains(e.target) && !tagsMenu.contains(e.target)) {
-          tagsMenu.style.display = "none";
+          tagsMenu.classList.add("hidden");
         }
       });
     }
@@ -2638,7 +2638,7 @@ function syncFieldsHTML() {
     return `
       <div class="form-group">
         <label>Days to look back</label>
-        <input type="number" class="form-control" id="sync-days" value="7" min="1" max="31">
+        <input type="number" class="form-control" id="sync-days" value="2" min="1" max="31">
       </div>
     `;
   }
@@ -2709,7 +2709,23 @@ async function resetSyncHistory() {
   }
 }
 
+function _warnNoAISyncOnce() {
+  const TOAST_KEY = "fincoach-sync-ai-reminder-shown";
+  if (sessionStorage.getItem(TOAST_KEY)) return;
+  const settings = AI.getSettings();
+  const provider = settings.provider;
+  const needsConsent =
+    provider && AI.requiresExternalConsent(provider) && !AI.hasExternalConsent(provider);
+  if (!provider || needsConsent) {
+    sessionStorage.setItem(TOAST_KEY, "1");
+    Toast.info(
+      "For smarter transaction extraction: add an AI API key in Settings → AI Settings and accept the Review Consent.",
+    );
+  }
+}
+
 async function runSync() {
+  _warnNoAISyncOnce();
   const btn = document.getElementById("btn-sync");
   const resultsDiv = document.getElementById("sync-results");
 
@@ -2718,7 +2734,7 @@ async function runSync() {
 
   const params = { auto_import: true, batch_size: 20 };
   if (syncMode === "days") {
-    params.days = Number.parseInt(document.getElementById("sync-days").value, 10) || 7;
+    params.days = Number.parseInt(document.getElementById("sync-days").value, 10) || 2;
   } else {
     const startVal = document.getElementById("sync-start").value;
     const endVal = document.getElementById("sync-end").value;
@@ -2912,7 +2928,7 @@ function renderBankTile(a, accountMap) {
       <div class="account-card-actions">
         ${_accountTileEditBtn(a)} ${_accountTileDeleteBtn(a)}
       </div>
-      <div class="account-children" id="children-${a.id}" style="display:none">
+      <div class="account-children hidden" id="children-${a.id}">
         ${renderAccountChildren(a.merged_accounts || [], accountMap, 1)}
       </div>
     </div>
@@ -2939,7 +2955,7 @@ function renderCreditCardTile(a, accountMap) {
           </div>
         </div>
       </div>
-      <div class="account-children" id="children-${a.id}" style="display:none">
+      <div class="account-children hidden" id="children-${a.id}">
         ${renderAccountChildren(a.merged_accounts || [], accountMap, 1)}
       </div>
     </div>
@@ -2965,7 +2981,7 @@ function renderDebitCardTile(a, accountMap) {
           </div>
         </div>
       </div>
-      <div class="account-children" id="children-${a.id}" style="display:none">
+      <div class="account-children hidden" id="children-${a.id}">
         ${renderAccountChildren(a.merged_accounts || [], accountMap, 1)}
       </div>
     </div>
@@ -2987,7 +3003,7 @@ function renderWalletTile(a, accountMap) {
       <div class="account-card-actions">
         ${_accountTileEditBtn(a)} ${_accountTileDeleteBtn(a)}
       </div>
-      <div class="account-children" id="children-${a.id}" style="display:none">
+      <div class="account-children hidden" id="children-${a.id}">
         ${renderAccountChildren(a.merged_accounts || [], accountMap, 1)}
       </div>
     </div>
@@ -3019,7 +3035,7 @@ function renderAccountChildren(children, accountMap, depth) {
 
 function toggleAccountChildren(accountId) {
   const el = document.getElementById(`children-${accountId}`);
-  if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+  if (el) el.classList.toggle("hidden");
 }
 
 // ---- Account Actions ----
@@ -5372,7 +5388,7 @@ async function renderReports() {
             <span id="report-tags-label">Filter by tags</span>
             <span class="tag-filter-arrow">▾</span>
           </button>
-          <div class="tag-filter-menu" id="report-tags-menu" style="display:none">
+          <div class="tag-filter-menu hidden" id="report-tags-menu">
             ${allTags.map((t) => `<label class="tag-filter-option"><input type="checkbox" value="${t.id}"> #${escapeHtml(t.name)}</label>`).join("")}
           </div>
         </div>
@@ -5408,11 +5424,11 @@ async function renderReports() {
   if (rTagsBtn && rTagsMenu) {
     rTagsBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      rTagsMenu.style.display = rTagsMenu.style.display === "none" ? "block" : "none";
+      rTagsMenu.classList.toggle("hidden");
     });
     document.addEventListener("click", function closeRTagsMenu(e) {
       if (!rTagsBtn.contains(e.target) && !rTagsMenu.contains(e.target)) {
-        rTagsMenu.style.display = "none";
+        rTagsMenu.classList.add("hidden");
       }
     });
   }
@@ -6709,9 +6725,11 @@ function renderVaultUnlock() {
       </div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector("#vault-unlock-passphrase").addEventListener("keydown", (e) => {
+  const pinInput = overlay.querySelector("#vault-unlock-passphrase");
+  pinInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doUnlockVault();
   });
+  pinInput.focus();
   if (biometricEnabled) doUnlockWithBiometric();
 }
 
@@ -7010,6 +7028,7 @@ document.addEventListener("db-ready", () => {
   Router.init();
   applyPrivacyState();
   checkOnboarding();
+  document.addEventListener("gmail-sync-start", _warnNoAISyncOnce);
   document.addEventListener("gmail-sync-start", () => StatusBar.set("Syncing transactions…", true));
   document.addEventListener("gmail-sync-end", ({ detail }) => {
     if (detail?.error) {

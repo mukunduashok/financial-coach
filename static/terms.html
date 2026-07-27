@@ -72,6 +72,14 @@
         damage, disable, or impair the application or related services.
       </li>
       <li>
+        When using external AI providers (Groq, OpenAI, Gemini, Azure OpenAI), you should
+        avoid including personal names, contact details, or other sensitive information in goal
+        names, budget names, or free-form chat messages. The app's automatic masking
+        (<code>maskPII()</code>) covers structured identifiers (phone numbers, email, PAN,
+        Aadhaar) but is pattern-based and cannot guarantee that all personal names in
+        user-authored text will be redacted before being sent to the AI provider.
+      </li>
+      <li>
         You are responsible for maintaining appropriate backups of your financial data. Financial
         Coach's session wipe feature (6-hour inactivity default) will permanently delete local data
         unless you have an external backup.

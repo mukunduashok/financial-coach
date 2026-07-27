@@ -105,14 +105,21 @@
       locally on your device and does not require external sharing. Before sending, our
       <code>maskPII()</code> function masks detected identifiers such as phone numbers, email
       addresses, PAN, Aadhaar, UPI handles, and labelled account / card references when possible.
+      Account names are replaced with anonymous references (for example, 'Account 1') before
+      sending, so manually renamed account names are never included in AI prompts.
       Financial Coach does not intercept, log, or store AI prompts on its own servers, but your
       configured provider processes requests under its own privacy policy, retention, and region
       settings.
     </p>
     <p>
-      AI prompts may include masked transaction descriptions, account summaries, budgets, goals,
-      and Gmail-derived content relevant to the feature you triggered (for example chat or Gmail
-      extraction). Do not paste secrets or personal details into free-form prompts unless you are
+      AI prompts may include masked transaction descriptions, anonymised account summaries,
+      budgets, goals, and Gmail-derived content relevant to the feature you triggered (for
+      example chat or Gmail extraction). <strong>Goal names and budget names you create are
+      sent as typed</strong> — avoid including personal names or sensitive details in those
+      fields if you use an external AI provider. Free-form messages you type in the AI chat
+      are processed by <code>maskPII()</code>, but masking is pattern-based and may not catch
+      every personal name or custom phrase you type. Do not include secrets, real names, or
+      personal details in goal names, budget names, or free-form chat messages unless you are
       comfortable sharing them with your chosen provider.
     </p>
     <p>
