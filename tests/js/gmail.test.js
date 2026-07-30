@@ -1384,20 +1384,25 @@ describe("LLM Call", () => {
   });
 
   it("sends response_mime_type application/json for Gemini provider", async () => {
+    const { AI } = await import("../../static/js/ai.js");
     localStorageData["fincoach-ai-settings"] = JSON.stringify({
       provider: "gemini",
-      apiKey: "test-key",
       model: "gemini-2.0-flash-lite",
     });
+    AI.setDecrypted({ apiKey: "test-key" });
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ candidates: [{ content: { parts: [{ text: "[]" }] } }] }),
     });
     vi.stubGlobal("fetch", mockFetch);
     await Gmail._callLLM("test prompt");
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const fetchCall = mockFetch.mock.calls[0];
+    const body = JSON.parse(fetchCall[1].body);
     expect(body.generationConfig.response_mime_type).toBe("application/json");
     expect(body.generationConfig.temperature).toBe(0.1);
+    expect(fetchCall[0]).not.toContain("key=");
+    expect(fetchCall[1].headers["x-goog-api-key"]).toBe("test-key");
+    AI.setDecrypted(null);
   });
 });
 

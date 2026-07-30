@@ -14,8 +14,8 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: "python3 -m http.server 8082 --bind 127.0.0.1 --directory static",
-    port: 8082,
+    command: "npx serve static -l 8082 --cors",
+    url: "http://127.0.0.1:8082",
     reuseExistingServer: !process.env.CI,
   },
 });

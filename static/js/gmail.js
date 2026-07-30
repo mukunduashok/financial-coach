@@ -1048,7 +1048,8 @@ export const Gmail = {
       headers["api-key"] = apiKey;
     } else if (provider === "gemini") {
       const geminiModel = model || config.defaultModel;
-      fetchEndpoint = `${config.endpoint}/${geminiModel}:generateContent?key=${apiKey}`;
+      fetchEndpoint = `${config.endpoint}/${geminiModel}:generateContent`;
+      headers["x-goog-api-key"] = apiKey;
     } else {
       fetchEndpoint = config.endpoint;
       if (config.requiresKey) headers.Authorization = `Bearer ${apiKey}`;

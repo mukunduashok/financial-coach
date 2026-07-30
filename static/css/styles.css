@@ -1104,6 +1104,10 @@ body.light .acct-tile--debit {
   margin: var(--space-xl) auto;
 }
 
+.spinner--page {
+  margin-top: 40vh;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
