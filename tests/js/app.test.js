@@ -1691,6 +1691,20 @@ describe("categoryIcon", () => {
     expect(html).toContain("tx-icon-letter");
     expect(html).toContain("?");
   });
+
+  test("categoryIcon XSS: category starting with < is escaped", () => {
+    const html = window.categoryIcon("<script>");
+    expect(html).toContain("&lt;");
+    expect(html).not.toContain("<script");
+  });
+  test("categoryIcon XSS: category starting with & is escaped", () => {
+    const html = window.categoryIcon("&evil");
+    expect(html).toContain("&amp;");
+  });
+  test("categoryIcon XSS: category starting with \" is escaped", () => {
+    const html = window.categoryIcon('"quote');
+    expect(html).toContain("&quot;");
+  });
 });
 
 // ===========================================================================

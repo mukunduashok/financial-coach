@@ -396,6 +396,13 @@ export const Gmail = {
     return !!(s.accessToken && s.refreshToken);
   },
 
+  _validateAuthUrl(url) {
+    const parsed = new URL(url); // throws if malformed
+    if (!["https://accounts.google.com"].includes(parsed.origin)) {
+      throw new Error("Unexpected OAuth redirect origin");
+    }
+  },
+
   async connect() {
     const { Vault } = await import("./vault.js");
     if (!Vault.isConfigured()) {
@@ -416,6 +423,7 @@ export const Gmail = {
       const data = await resp.json();
       authUrl = data.auth_url;
       if (!authUrl) throw new Error("No auth URL returned");
+      this._validateAuthUrl(authUrl);
     } catch (err) {
       this._clearPendingOAuthState();
       throw err;

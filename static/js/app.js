@@ -134,7 +134,7 @@ function categoryIcon(name) {
   if (name && CATEGORY_ICONS[name]) {
     return `<span>${CATEGORY_ICONS[name]}</span>`;
   }
-  const letter = (name || "?")[0].toUpperCase();
+  const letter = escapeHtml((name || "?")[0].toUpperCase());
   return `<span class="tx-icon-letter">${letter}</span>`;
 }
 
@@ -6607,6 +6607,10 @@ async function onboardingConnectGmail() {
     if (result?.connected) {
       onboardingAdvance(4);
     } else if (result?.auth_url) {
+      const parsed = new URL(result.auth_url);
+      if (parsed.origin !== "https://accounts.google.com") {
+        throw new Error("Unexpected OAuth redirect origin");
+      }
       window.location.href = result.auth_url;
       onboardingAdvance(4);
     }

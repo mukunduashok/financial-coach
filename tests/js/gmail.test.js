@@ -320,6 +320,36 @@ describe("Gmail OAuth", () => {
     Vault.isUnlocked.mockReturnValue(false);
     await expect(Gmail.connect()).rejects.toThrow("Unlock your PIN before connecting Gmail.");
   });
+
+  it("connect() rejects when proxy returns an evil auth_url", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ auth_url: "https://evil.example.com/oauth" }),
+    });
+    globalThis.open = vi.fn().mockReturnValue(null);
+    await expect(Gmail.connect()).rejects.toThrow("Unexpected OAuth redirect origin");
+  });
+
+  it("connect() rejects when auth_url is not a valid URL", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ auth_url: "not-a-url" }),
+    });
+    globalThis.open = vi.fn().mockReturnValue(null);
+    await expect(Gmail.connect()).rejects.toThrow();
+  });
+
+  it("_validateAuthUrl does not throw for accounts.google.com", () => {
+    expect(() =>
+      Gmail._validateAuthUrl("https://accounts.google.com/o/oauth2/auth"),
+    ).not.toThrow();
+  });
+
+  it("_validateAuthUrl throws for a look-alike origin", () => {
+    expect(() =>
+      Gmail._validateAuthUrl("https://accounts.google.com.evil.com/fake"),
+    ).toThrow("Unexpected OAuth redirect origin");
+  });
 });
 
 // ===========================================================================

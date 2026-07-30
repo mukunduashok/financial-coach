@@ -1189,6 +1189,17 @@ describe("Merchants CRUD", () => {
     expect(results[0].merchant_upi_id).toBe("shop@upi");
   });
 
+  test("searchMerchants: % wildcard is treated as literal", async () => {
+    await DB.createMerchant({ merchant_name: "Swiggy", category_id: categoryId });
+    const results = await DB.searchMerchants("%");
+    expect(results).toHaveLength(0);
+  });
+  test("searchMerchants: _ wildcard is treated as literal", async () => {
+    await DB.createMerchant({ merchant_name: "A B", category_id: categoryId });
+    const results = await DB.searchMerchants("_");
+    expect(results).toHaveLength(0);
+  });
+
   it("creates a merchant", async () => {
     const m = await DB.createMerchant({
       merchant_name: "TestMerchant",

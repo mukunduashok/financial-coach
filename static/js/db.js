@@ -610,6 +610,10 @@ function _normalizeMerchantName(name) {
  * exists: lowercased, trimmed, whitespace collapsed, spaces → "-", and every
  * character that is not alphanumeric or "-" stripped. Returns null for empty input.
  */
+function _escapeLike(s) {
+  return s.replace(/[%_\\]/g, "\\$&");
+}
+
 function _slug(name) {
   if (!name) return null;
   const s = name
@@ -2402,9 +2406,9 @@ export const DB = {
   },
 
   async searchMerchants(q) {
-    const pattern = `%${q}%`;
+    const pattern = `%${_escapeLike(q)}%`;
     const rows = this._queryAll(
-      "SELECT * FROM merchants WHERE display_name LIKE ? OR merchant_key LIKE ? OR merchant_upi_id LIKE ? ORDER BY display_name",
+      "SELECT * FROM merchants WHERE display_name LIKE ? ESCAPE '\\' OR merchant_key LIKE ? ESCAPE '\\' OR merchant_upi_id LIKE ? ESCAPE '\\' ORDER BY display_name",
       [pattern, pattern, pattern],
     );
     return rows.map((m) => this._buildMerchantResponse(m));
