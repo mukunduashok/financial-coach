@@ -1331,7 +1331,7 @@ JSON Array Response:`;
         const emailData = parsedEmails[i];
         const extracted = this._extractWithRegex(emailData);
         if (!extracted) {
-          console.warn("Regex extraction failed for email:", emailData.id);
+          if (window.__DEBUG__) console.warn("Regex extraction failed for email:", emailData.id);
           errorDetails.push({ id: emailData.id, error: "Could not parse without AI" });
           errors++;
           continue;

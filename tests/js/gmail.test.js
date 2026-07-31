@@ -1945,6 +1945,81 @@ describe("extractTransactions pipeline", () => {
 });
 
 // ===========================================================================
+// FINCO-75 — Gmail message IDs only logged when window.__DEBUG__ is enabled
+// ===========================================================================
+describe("Regex-fallback logging is gated behind window.__DEBUG__ (FINCO-75)", () => {
+  // Build a raw email that _extractWithRegex cannot parse (no amount/keywords).
+  const unparseableRaw = btoa(
+    "From: alerts@hdfcbank.net\r\nSubject: Newsletter\r\nDate: Wed, 15 Jan 2025 10:00:00\r\nContent-Type: text/plain\r\n\r\nThank you for banking with us. Your monthly newsletter is ready.",
+  );
+
+  function mockUnparseableEmail() {
+    globalThis.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes("gmail.googleapis.com") && url.includes("/messages?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ messages: [{ id: "msg_no_debug" }] }),
+        };
+      }
+      if (url.includes("gmail.googleapis.com") && url.includes("/messages/msg_no_debug")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ raw: unparseableRaw }),
+        };
+      }
+      return { ok: false, status: 404 };
+    });
+  }
+
+  beforeEach(async () => {
+    // No AI settings → LLM unavailable → regex fallback path is exercised.
+    delete localStorageData["fincoach-ai-settings"];
+    await Gmail.saveSettings({
+      accessToken: "tok",
+      refreshToken: "ref",
+      tokenExpiry: Date.now() + 3600000,
+    });
+    // biome-ignore lint/performance/noDelete: reset debug flag between tests
+    delete window.__DEBUG__;
+  });
+
+  afterEach(() => {
+    // biome-ignore lint/performance/noDelete: reset debug flag between tests
+    delete window.__DEBUG__;
+  });
+
+  it("does NOT log the Gmail message ID when __DEBUG__ is unset", async () => {
+    mockUnparseableEmail();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await Gmail.extractTransactions({ days: 7 });
+
+    // Confirms the regex-fallback branch was reached (extraction failed).
+    expect(result.errors).toBeGreaterThanOrEqual(1);
+    const loggedTheId = warnSpy.mock.calls.some((args) =>
+      args.some((a) => typeof a === "string" && a.includes("msg_no_debug")),
+    );
+    expect(loggedTheId).toBe(false);
+  });
+
+  it("logs the Gmail message ID when __DEBUG__ is truthy", async () => {
+    mockUnparseableEmail();
+    window.__DEBUG__ = true;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await Gmail.extractTransactions({ days: 7 });
+
+    expect(result.errors).toBeGreaterThanOrEqual(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Regex extraction failed for email:",
+      "msg_no_debug",
+    );
+  });
+});
+
+// ===========================================================================
 // 18. Balance Account Type Guard — INSERT (_getOrCreateAccount)
 // ===========================================================================
 describe("Balance Account Type Guard — INSERT", () => {

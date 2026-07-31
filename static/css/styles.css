@@ -2873,3 +2873,13 @@ body.privacy-active .amount-private {
 .settings-legal-footer a:hover {
   color: var(--color-primary);
 }
+
+/* ---- PIN strength indicator ---- */
+.pin-strength-bar {
+  font-size: 0.78rem;
+  margin-top: 4px;
+  min-height: 1.1em;
+}
+.pin-strength-bar.weak  { color: #EF5350; }
+.pin-strength-bar.fair  { color: #FFA726; }
+.pin-strength-bar.strong { color: #66BB6A; }

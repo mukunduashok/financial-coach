@@ -8,7 +8,7 @@ import { test, expect } from "./fixtures.js";
 // Used in tests that exercise the unlock / reset flows, bypassing the
 // vault-setup button in settings (which is rendered only if the card exists).
 // ---------------------------------------------------------------------------
-async function setupAndLockVault(page, passphrase = "1234") {
+async function setupAndLockVault(page, passphrase = "123456") {
 	await page.evaluate(async (pp) => {
 		await window.API.setupVault(pp);
 		window.API.lockVault();
@@ -93,14 +93,14 @@ test.describe("Vault settings card", () => {
 		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
 		await expect(page.locator("#vault-setup-passphrase")).toHaveAttribute("inputmode", "numeric");
 		await expect(page.locator("#vault-setup-confirm")).toHaveAttribute("inputmode", "numeric");
-		// Short PIN — must be at least 4 characters
+		// Non-numeric PIN — must be rejected
 		await page.fill("#vault-setup-passphrase", "abc");
 		await page.fill("#vault-setup-confirm", "abc");
 		await page.click('[data-action="do-setup-vault"]');
 		await expect(page.locator("#vault-setup-error")).toBeVisible({ timeout: 3_000 });
-		// Mismatched passphrases
-		await page.fill("#vault-setup-passphrase", "5678");
-		await page.fill("#vault-setup-confirm", "4321");
+		// Mismatched passphrases (6 digits each)
+		await page.fill("#vault-setup-passphrase", "654321");
+		await page.fill("#vault-setup-confirm", "543210");
 		await page.click('[data-action="do-setup-vault"]');
 		await expect(page.locator("#vault-setup-error")).toBeVisible();
 	});
@@ -111,8 +111,8 @@ test.describe("Vault settings card", () => {
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
 		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
-		await page.fill("#vault-setup-passphrase", "1234");
-		await page.fill("#vault-setup-confirm", "1234");
+		await page.fill("#vault-setup-passphrase", "123456");
+		await page.fill("#vault-setup-confirm", "123456");
 		await page.click('[data-action="do-setup-vault"]');
 		// Vault.setup() writes the salt to localStorage before any UI update.
 		// Wait for the salt key to confirm crypto completed (PBKDF2 takes a few seconds).
@@ -135,8 +135,8 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
-		await page.fill("#vault-setup-passphrase", "1234");
-		await page.fill("#vault-setup-confirm", "1234");
+		await page.fill("#vault-setup-passphrase", "123456");
+		await page.fill("#vault-setup-confirm", "123456");
 		await page.click('[data-action="do-setup-vault"]');
 		// Wait for the vault salt to appear in localStorage (crypto complete).
 		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
@@ -157,14 +157,14 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
-		await page.fill("#vault-setup-passphrase", "1234");
-		await page.fill("#vault-setup-confirm", "1234");
+		await page.fill("#vault-setup-passphrase", "123456");
+		await page.fill("#vault-setup-confirm", "123456");
 		await page.click('[data-action="do-setup-vault"]');
 		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
 			timeout: 15_000,
 		});
 		await page.evaluate(async () => {
-			await window.API.setupBiometric("1234");
+			await window.API.setupBiometric("123456");
 		});
 		await page.goto("/#/");
 		await page.goto("/#/settings");
@@ -177,8 +177,8 @@ test.describe("Vault settings card", () => {
 		await page.goto("/#/settings");
 		await page.waitForSelector("#screen", { timeout: 10_000 });
 		await page.click('[data-action="vault-setup"]');
-		await page.fill("#vault-setup-passphrase", "1234");
-		await page.fill("#vault-setup-confirm", "1234");
+		await page.fill("#vault-setup-passphrase", "123456");
+		await page.fill("#vault-setup-confirm", "123456");
 		await page.click('[data-action="do-setup-vault"]');
 		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
 			timeout: 15_000,
@@ -197,17 +197,17 @@ test.describe("Vault settings card", () => {
 test.describe("Vault unlock screen", () => {
 	test("Vault lock shows unlock screen on reload", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 	});
 
 	test("Vault unlock - wrong passphrase shows error", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		await expect(page.locator("#vault-unlock-passphrase")).toHaveAttribute("inputmode", "numeric");
 		// Enter wrong passphrase
-		await page.fill("#vault-unlock-passphrase", "9999");
+		await page.fill("#vault-unlock-passphrase", "999999");
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-error")).toBeVisible({ timeout: 5_000 });
 		// Unlock screen should still be visible
@@ -216,10 +216,10 @@ test.describe("Vault unlock screen", () => {
 
 	test("Vault unlock - correct passphrase dismisses screen", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Enter correct passphrase
-		await page.fill("#vault-unlock-passphrase", "1234");
+		await page.fill("#vault-unlock-passphrase", "123456");
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
 		// App should load normally
@@ -228,7 +228,7 @@ test.describe("Vault unlock screen", () => {
 
 	test("Vault forgot passphrase - shows reset modal", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Click forgot passphrase
 		await page.click('[data-action="vault-forgot-passphrase"]');
@@ -239,7 +239,7 @@ test.describe("Vault unlock screen", () => {
 		pwaPage,
 	}) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 		// Click forgot passphrase
 		await page.click('[data-action="vault-forgot-passphrase"]');
@@ -269,7 +269,7 @@ test.describe("Vault unlock screen", () => {
 // ---------------------------------------------------------------------------
 const AI_SETTINGS_LS_KEY = "fincoach-ai-settings";
 
-async function setupVaultAndSaveAI(page, { provider, model, apiKey, pin = "1234" }) {
+async function setupVaultAndSaveAI(page, { provider, model, apiKey, pin = "123456" }) {
 	await page.evaluate(
 		async ({ provider, model, apiKey, pin }) => {
 			await window.API.setupVault(pin);
@@ -284,7 +284,7 @@ async function lockAndReload(page) {
 	await page.reload({ waitUntil: "domcontentloaded" });
 }
 
-async function unlockViaScreen(page, pin = "1234") {
+async function unlockViaScreen(page, pin = "123456") {
 	await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 	await page.fill("#vault-unlock-passphrase", pin);
 	await page.click('[data-action="unlock-vault"]');
@@ -310,7 +310,7 @@ test.describe("AI settings survive vault unlock", () => {
 			apiKey: "sk-groq-123",
 		});
 		await lockAndReload(page);
-		await unlockViaScreen(page, "1234");
+		await unlockViaScreen(page, "123456");
 		await goSettingsHash(page);
 		// Primary user-visible assertion: provider dropdown + model input restored.
 		await expect(page.locator("#ai-provider")).toHaveValue("groq");
@@ -332,7 +332,7 @@ test.describe("AI settings survive vault unlock", () => {
 		// encrypted vault {apiKey} intact.
 		await page.evaluate((k) => localStorage.removeItem(k), AI_SETTINGS_LS_KEY);
 		await lockAndReload(page);
-		await unlockViaScreen(page, "1234");
+		await unlockViaScreen(page, "123456");
 		// The API key remains usable from the vault.
 		const apiKey = await page.evaluate(() => window.AI.getSettings().apiKey);
 		expect(apiKey).toBe("sk-groq-123");
@@ -354,10 +354,10 @@ test.describe("AI settings survive vault unlock", () => {
 			apiKey: "sk-openai-xyz",
 		});
 		await page.evaluate(async () => {
-			await window.API.changeVaultPassphrase("1234", "5678");
+			await window.API.changeVaultPassphrase("123456", "567890");
 		});
 		await lockAndReload(page);
-		await unlockViaScreen(page, "5678");
+		await unlockViaScreen(page, "567890");
 		await goSettingsHash(page);
 		await expect(page.locator("#ai-provider")).toHaveValue("openai");
 		await expect(page.locator("#ai-model")).toHaveValue("gpt-4o-mini");
@@ -373,7 +373,7 @@ test.describe("AI settings survive vault unlock", () => {
 			apiKey: "sk-bio-1",
 		});
 		await page.evaluate(async () => {
-			await window.API.setupBiometric("1234");
+			await window.API.setupBiometric("123456");
 		});
 		await page.evaluate(() => window.API.lockVault());
 		await page.reload({ waitUntil: "domcontentloaded" });
@@ -425,7 +425,7 @@ test.describe("AI settings survive vault unlock", () => {
 test.describe("Vault unlock screen auto-focus", () => {
 	test("PIN input is auto-focused when unlock screen appears", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 
 		const isFocused = await page
@@ -436,13 +436,160 @@ test.describe("Vault unlock screen auto-focus", () => {
 
 	test("pressing Enter with correct PIN unlocks vault", async ({ pwaPage }) => {
 		const page = pwaPage;
-		await setupAndLockVault(page, "1234");
+		await setupAndLockVault(page, "123456");
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
 
-		await page.fill("#vault-unlock-passphrase", "1234");
+		await page.fill("#vault-unlock-passphrase", "123456");
 		await page.press("#vault-unlock-passphrase", "Enter");
 
 		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
 		await expect(page.locator("#app")).toBeVisible({ timeout: 5_000 });
 	});
+});
+
+// ===========================================================================
+// FINCO-74 — PIN strength feedback and 6-digit minimum enforcement in setup UI
+// ===========================================================================
+test.describe("Vault PIN strength and 6-digit minimum (FINCO-74)", () => {
+	test("setup modal shows strength bar when typing a PIN", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.click('[data-action="vault-setup"]');
+		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
+
+		// Type 4 digits → weak
+		await page.fill("#vault-setup-passphrase", "1234");
+		await expect(page.locator("#vault-setup-strength")).toHaveText("Weak");
+
+		// Type 6 digits → fair
+		await page.fill("#vault-setup-passphrase", "123456");
+		await expect(page.locator("#vault-setup-strength")).toHaveText("Fair");
+
+		// Type 8 digits → strong
+		await page.fill("#vault-setup-passphrase", "12345678");
+		await expect(page.locator("#vault-setup-strength")).toHaveText("Strong");
+	});
+
+	test("setup rejects a 4-digit PIN with an error message", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.click('[data-action="vault-setup"]');
+		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
+
+		await page.fill("#vault-setup-passphrase", "1234");
+		await page.fill("#vault-setup-confirm", "1234");
+		await page.click('[data-action="do-setup-vault"]');
+
+		await expect(page.locator("#vault-setup-error")).toBeVisible({ timeout: 3_000 });
+		await expect(page.locator("#vault-setup-error")).toContainText("6");
+	});
+
+	test("setup accepts a 6-digit PIN and shows active state", async ({ pwaPage }) => {
+		const page = pwaPage;
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.click('[data-action="vault-setup"]');
+		await expect(page.locator("#vault-setup-passphrase")).toBeVisible({ timeout: 3_000 });
+
+		await page.fill("#vault-setup-passphrase", "987654");
+		await page.fill("#vault-setup-confirm", "987654");
+		await page.click('[data-action="do-setup-vault"]');
+
+		await page.waitForFunction(() => !!localStorage.getItem("fincoach-vault-salt"), {
+			timeout: 15_000,
+		});
+		await page.goto("/#/");
+		await page.goto("/#/settings");
+		await expect(page.locator("text=PIN protection active")).toBeVisible({ timeout: 5_000 });
+	});
+
+	test("change-PIN modal shows a strength bar that updates as you type", async ({ pwaPage }) => {
+		const page = pwaPage;
+		// Configure + unlock the vault so the Change PIN action is available.
+		await page.goto("/#/settings");
+		await page.waitForSelector("#screen", { timeout: 10_000 });
+		await page.evaluate(async () => {
+			await window.API.setupVault("123456");
+		});
+		await page.goto("/#/");
+		await page.goto("/#/settings");
+
+		await page.click('[data-action="vault-change-passphrase"]');
+		await expect(page.locator("#vault-change-new")).toBeVisible({ timeout: 3_000 });
+
+		await page.fill("#vault-change-new", "1234");
+		await expect(page.locator("#vault-change-strength")).toHaveText("Weak");
+		await page.fill("#vault-change-new", "123456");
+		await expect(page.locator("#vault-change-strength")).toHaveText("Fair");
+		await page.fill("#vault-change-new", "12345678");
+		await expect(page.locator("#vault-change-strength")).toHaveText("Strong");
+	});
+
+	// FINCO-74 regression fixed: doUnlockVault() now dispatches `db-ready` (which
+	// runs Toast.init()) before the deferred upgrade nudge, so the legacy-vault
+	// unlock no longer throws and existing users are not locked out.
+	test(
+		"legacy vault (no PIN version) unlocks and shows an upgrade nudge",
+		async ({ pwaPage }) => {
+			const page = pwaPage;
+			await page.goto("/#/settings");
+			await page.waitForSelector("#screen", { timeout: 10_000 });
+			// Configure the vault, then simulate a legacy vault by dropping the version key.
+			await page.evaluate(async () => {
+				await window.API.setupVault("123456");
+				localStorage.removeItem("fincoach-vault-pin-version");
+				window.API.lockVault();
+			});
+			await page.reload({ waitUntil: "domcontentloaded" });
+
+			await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+			await page.fill("#vault-unlock-passphrase", "123456");
+			await page.click('[data-action="unlock-vault"]');
+
+			// The correct PIN must unlock the app (no lockout for existing users)...
+			await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
+			await expect(page.locator(".bottom-nav")).toBeVisible({ timeout: 8_000 });
+			// ...and the migration nudge should be surfaced.
+			await expect(page.locator(".toast.info")).toContainText("under 6 digits", {
+				timeout: 5_000,
+			});
+		},
+	);
+
+	// Modern vault (6-digit PIN, `fincoach-vault-pin-version` present) must unlock
+	// cleanly WITHOUT the "under 6 digits" upgrade nudge.
+	test(
+		"modern vault (PIN version present) unlocks with no upgrade nudge",
+		async ({ pwaPage }) => {
+			const page = pwaPage;
+			await page.goto("/#/settings");
+			await page.waitForSelector("#screen", { timeout: 10_000 });
+			// Configure a modern vault — setupVault writes fincoach-vault-pin-version.
+			await page.evaluate(async () => {
+				await window.API.setupVault("123456");
+				window.API.lockVault();
+			});
+			// Sanity: the version key exists (this is what marks the vault "modern").
+			const version = await page.evaluate(() =>
+				localStorage.getItem("fincoach-vault-pin-version"),
+			);
+			expect(version).toBe("2");
+
+			await page.reload({ waitUntil: "domcontentloaded" });
+
+			await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
+			await page.fill("#vault-unlock-passphrase", "123456");
+			await page.click('[data-action="unlock-vault"]');
+
+			// Unlocks cleanly and the app becomes usable.
+			await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
+			await expect(page.locator(".bottom-nav")).toBeVisible({ timeout: 8_000 });
+
+			// Wait past the 100ms deferred-nudge window, then assert no upgrade nudge.
+			await page.waitForTimeout(500);
+			await expect(page.locator(".toast.info", { hasText: "under 6 digits" })).toHaveCount(0);
+		},
+	);
 });

@@ -25,7 +25,7 @@ async function goSettings(page) {
 async function simulateGmailConnected(page, email = "test@gmail.com") {
 	await page.evaluate(async (e) => {
 		if (!window.API.isVaultConfigured()) {
-			await window.API.setupVault("1234");
+			await window.API.setupVault("123456");
 		}
 		await window.Gmail.saveSettings({
 			email: e,
@@ -457,7 +457,7 @@ test.describe("GDrive Settings — restore does not poison AI settings", () => {
 		const page = pwaPage;
 		// Vault set up + unlocked so a restored API key can be persisted.
 		await page.evaluate(async () => {
-			await window.API.setupVault("1234");
+			await window.API.setupVault("123456");
 		});
 		const result = await page.evaluate(async () => {
 			const { GDrive } = await import("/js/gdrive.js");
@@ -499,7 +499,7 @@ test.describe("GDrive Settings — restore does not poison AI settings", () => {
 	}) => {
 		const page = pwaPage;
 		await page.evaluate(async () => {
-			await window.API.setupVault("1234");
+			await window.API.setupVault("123456");
 			// Local settings already configured with a different provider.
 			await window.AI.saveSettings({
 				provider: "openai",

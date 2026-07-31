@@ -836,6 +836,7 @@ const Toast = {
     el.className = `toast ${type}`;
     el.innerHTML = `<span>${escapeHtml(message)}</span><button class="toast-close">&times;</button>`;
     el.querySelector(".toast-close").onclick = () => el.remove();
+    if (!this.container) this.init();
     this.container.appendChild(el);
     if (type !== "error") {
       setTimeout(() => el.remove(), duration);
@@ -872,6 +873,7 @@ const Toast = {
     closeBtn.textContent = "×";
     closeBtn.onclick = () => el.remove();
     el.append(span, actionBtn, closeBtn);
+    if (!this.container) this.init();
     this.container.appendChild(el);
     setTimeout(() => el.remove(), 8000);
   },
@@ -2534,7 +2536,27 @@ function clearGmailVaultGateToasts() {
 }
 
 function isNumericPin(value) {
-  return /^\d{4,}$/u.test(value);
+  return /^\d{6,}$/u.test(value);
+}
+
+const isExistingNumericPin = /^\d{4,}$/u;
+
+function _updatePinStrength(pin, elId) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (pin.length < 6) {
+    el.textContent = "Weak";
+    el.classList.remove("fair", "strong");
+    el.classList.add("weak");
+  } else if (pin.length <= 7) {
+    el.textContent = "Fair";
+    el.classList.remove("weak", "strong");
+    el.classList.add("fair");
+  } else {
+    el.textContent = "Strong";
+    el.classList.remove("weak", "fair");
+    el.classList.add("strong");
+  }
 }
 
 function pinInputAttrs(preferNumeric = API.prefersNumericPinInput(), enterKeyHint = "done") {
@@ -6747,7 +6769,7 @@ async function doUnlockVault() {
     errEl.style.display = "";
     return;
   }
-  if (API.prefersNumericPinInput() && !isNumericPin(passphrase)) {
+  if (API.prefersNumericPinInput() && !isExistingNumericPin.test(passphrase)) {
     errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
@@ -6755,11 +6777,18 @@ async function doUnlockVault() {
   try {
     const ok = await API.unlockVault(passphrase);
     if (ok) {
+      const needsPinUpgrade = Vault.requiresPinUpgrade();
       const overlay = document.getElementById("vault-unlock-screen");
       if (overlay) overlay.remove();
       clearGmailVaultGateToasts();
       document.dispatchEvent(new Event("db-ready"));
       await continuePendingGmailConnect();
+      if (needsPinUpgrade) {
+        // Deferred so the initial render's Toast.clearAll() doesn't wipe the nudge.
+        setTimeout(() => {
+          Toast.info("Your PIN is under 6 digits. Consider upgrading for better security.");
+        }, 100);
+      }
     } else {
       errEl.textContent = "Incorrect PIN. Please try again.";
       errEl.style.display = "";
@@ -6832,7 +6861,7 @@ async function doConfirmBiometricSetup() {
     errEl.style.display = "";
     return;
   }
-  if (API.prefersNumericPinInput() && !isNumericPin(passphrase)) {
+  if (API.prefersNumericPinInput() && !isExistingNumericPin.test(passphrase)) {
     errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
     errEl.style.display = "";
     return;
@@ -6878,8 +6907,9 @@ function showVaultSetupModal() {
         <p class="text-muted">If you forget your PIN, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
         <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
         <div class="form-group">
-          <label class="form-label">PIN <span class="text-muted">(digits only, min 4)</span></label>
+          <label class="form-label">PIN <span class="text-muted">(digits only, min 6)</span></label>
           <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password" ${newPinAttrs}>
+          <div id="vault-setup-strength" class="pin-strength-bar" aria-live="polite"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Confirm PIN</label>
@@ -6892,6 +6922,9 @@ function showVaultSetupModal() {
       </div>
     </div>`;
   document.body.insertAdjacentHTML("beforeend", html);
+  document.getElementById("vault-setup-passphrase")?.addEventListener("input", (e) => {
+    _updatePinStrength(e.target.value, "vault-setup-strength");
+  });
 }
 
 async function doSetupVault() {
@@ -6899,7 +6932,7 @@ async function doSetupVault() {
   const confirm = document.getElementById("vault-setup-confirm")?.value || "";
   const errEl = document.getElementById("vault-setup-error");
   if (!isNumericPin(passphrase)) {
-    errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
+    errEl.textContent = "PIN must contain only digits and be at least 6 digits.";
     errEl.style.display = "";
     return;
   }
@@ -6936,8 +6969,9 @@ function showChangePassphraseModal() {
           <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password" ${currentPinAttrs}>
         </div>
         <div class="form-group">
-          <label class="form-label">New PIN <span class="text-muted">(digits only, min 4)</span></label>
+          <label class="form-label">New PIN <span class="text-muted">(digits only, min 6)</span></label>
           <input type="password" id="vault-change-new" class="form-control" autocomplete="new-password" ${newPinAttrs}>
+          <div id="vault-change-strength" class="pin-strength-bar" aria-live="polite"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Confirm new PIN</label>
@@ -6950,6 +6984,9 @@ function showChangePassphraseModal() {
       </div>
     </div>`;
   document.body.insertAdjacentHTML("beforeend", html);
+  document.getElementById("vault-change-new")?.addEventListener("input", (e) => {
+    _updatePinStrength(e.target.value, "vault-change-strength");
+  });
 }
 
 async function doChangePassphrase() {
@@ -6958,7 +6995,7 @@ async function doChangePassphrase() {
   const confirmP = document.getElementById("vault-change-confirm")?.value || "";
   const errEl = document.getElementById("vault-change-error");
   if (!isNumericPin(newP)) {
-    errEl.textContent = "New PIN must contain only digits and be at least 4 digits.";
+    errEl.textContent = "New PIN must contain only digits and be at least 6 digits.";
     errEl.style.display = "";
     return;
   }

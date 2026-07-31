@@ -576,6 +576,8 @@ All application configuration is stored in `localStorage` using these standardiz
 | `GDRIVE_ENABLED_KEY` | `fincoach-gdrive-enabled` | Drive sync on/off |
 | `GDRIVE_LAST_SYNC_KEY` | `fincoach-gdrive-last-sync` | Last sync timestamp |
 | `GDRIVE_BACKUP_API_KEY_KEY` | `fincoach-gdrive-backup-api-key` | Include API key in backup |
+| `VAULT_PIN_KIND_KEY` | `fincoach-vault-pin-kind` | `"numeric"` when vault uses numeric PIN |
+| `VAULT_PIN_VERSION_KEY` | `fincoach-vault-pin-version` | `"2"` written on setup; absent = legacy <6-digit PIN (upgrade required) |
 | `ONBOARDED_KEY` | `fincoach-onboarded` | User completed onboarding |
 
 ### Deployment config (env.js)
@@ -631,6 +633,7 @@ tests/e2e/js/
 ├── sync.spec.js                # Gmail sync screen and date validation
 ├── taxonomy.spec.js            # Category/merchant/tag management
 ├── transactions.spec.js        # Add/edit/delete/filter transactions
+├── vault.spec.js               # Credential vault: setup/lock/unlock, PIN strength, 4→6 digit migration, biometric
 └── fixtures.js                 # Shared test fixtures and helpers
 ```
 

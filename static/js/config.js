@@ -71,3 +71,5 @@ export const VAULT_BIOMETRIC_WRAPPED_KEY = "fincoach-vault-biometric-wrapped";
 
 export const PRIVACY_MODE_KEY = "fincoach-privacy-mode";
 export const PRIVACY_REVEAL_MS = 300_000;
+
+export const VAULT_PIN_VERSION_KEY = "fincoach-vault-pin-version";

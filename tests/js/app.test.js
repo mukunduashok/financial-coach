@@ -2933,11 +2933,11 @@ describe("Vault — PIN minimum 4 characters", () => {
     mockAPI.setupVault.mockClear();
   });
 
-  it("showVaultSetupModal renders '(min 4 digits/characters)' label text", () => {
+  it("showVaultSetupModal renders '(min 6 digits/characters)' label text", () => {
     openVaultSetupModal();
     const modal = document.getElementById("vault-setup-modal");
     expect(modal).not.toBeNull();
-    expect(modal.textContent).toContain("digits only, min 4");
+    expect(modal.textContent).toContain("digits only, min 6");
     expect(modal.textContent).not.toContain("min 8 characters");
   });
 
@@ -2955,7 +2955,7 @@ describe("Vault — PIN minimum 4 characters", () => {
 
     const errEl = modal.querySelector("#vault-setup-error");
     expect(errEl.style.display).not.toBe("none");
-    expect(errEl.textContent).toContain("only digits and be at least 4 digits");
+    expect(errEl.textContent).toContain("only digits and be at least 6 digits");
     expect(mockAPI.setupVault).not.toHaveBeenCalled();
   });
 
@@ -2973,23 +2973,23 @@ describe("Vault — PIN minimum 4 characters", () => {
 
 		const errEl = modal.querySelector("#vault-setup-error");
 		expect(errEl.style.display).not.toBe("none");
-		expect(errEl.textContent).toContain("only digits and be at least 4 digits");
+		expect(errEl.textContent).toContain("only digits and be at least 6 digits");
 		expect(mockAPI.setupVault).not.toHaveBeenCalled();
 	});
 
-  it("doSetupVault accepts 4-digit PIN and calls API.setupVault", async () => {
+  it("doSetupVault accepts 6-digit PIN and calls API.setupVault", async () => {
     openVaultSetupModal();
     const modal = document.getElementById("vault-setup-modal");
     expect(modal).not.toBeNull();
 
-    modal.querySelector("#vault-setup-passphrase").value = "1234";
-    modal.querySelector("#vault-setup-confirm").value = "1234";
+    modal.querySelector("#vault-setup-passphrase").value = "123456";
+    modal.querySelector("#vault-setup-confirm").value = "123456";
 
     const submitBtn = modal.querySelector('[data-action="do-setup-vault"]');
     submitBtn.click();
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockAPI.setupVault).toHaveBeenCalledWith("1234");
+    expect(mockAPI.setupVault).toHaveBeenCalledWith("123456");
   });
 });
 
@@ -3112,12 +3112,12 @@ describe("Gmail connect vault gating", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     const modal = document.getElementById("vault-setup-modal");
-    modal.querySelector("#vault-setup-passphrase").value = "1234";
-    modal.querySelector("#vault-setup-confirm").value = "1234";
+    modal.querySelector("#vault-setup-passphrase").value = "123456";
+    modal.querySelector("#vault-setup-confirm").value = "123456";
     modal.querySelector('[data-action="do-setup-vault"]').click();
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockAPI.setupVault).toHaveBeenCalledWith("1234");
+    expect(mockAPI.setupVault).toHaveBeenCalledWith("123456");
     expect(mockAPI.getGmailConnectUrl).toHaveBeenCalledTimes(1);
   });
 
@@ -3141,8 +3141,8 @@ describe("Gmail connect vault gating", () => {
 		).toBe(true);
 
 		const modal = document.getElementById("vault-setup-modal");
-		modal.querySelector("#vault-setup-passphrase").value = "1234";
-		modal.querySelector("#vault-setup-confirm").value = "1234";
+		modal.querySelector("#vault-setup-passphrase").value = "123456";
+		modal.querySelector("#vault-setup-confirm").value = "123456";
 		modal.querySelector('[data-action="do-setup-vault"]').click();
 		await new Promise((r) => setTimeout(r, 50));
 

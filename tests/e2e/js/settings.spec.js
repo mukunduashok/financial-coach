@@ -23,7 +23,7 @@ async function getOptionTexts(locator) {
 async function simulateVaultBackedGmailConnected(page, email = "testuser@example.com") {
   await page.evaluate(async (e) => {
     if (!window.API.isVaultConfigured()) {
-      await window.API.setupVault("1234");
+      await window.API.setupVault("123456");
     }
     await window.Gmail.saveSettings({
       email: e,
@@ -147,7 +147,7 @@ test.describe("TestSettingsPage", () => {
     const page = pwaPage;
     // Set up the vault (PIN) so the secret API key can be saved.
     await page.evaluate(async () => {
-      await window.API.setupVault("1234");
+      await window.API.setupVault("123456");
     });
     // Re-render Settings so it reflects the unlocked vault state.
     await page.goto("/#/");
@@ -164,7 +164,7 @@ test.describe("TestSettingsPage", () => {
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 8_000 });
     // Unlock with the PIN.
-    await page.fill("#vault-unlock-passphrase", "1234");
+    await page.fill("#vault-unlock-passphrase", "123456");
     await page.click('[data-action="unlock-vault"]');
     await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 8_000 });
     // Settings must show the saved provider, model, and key (not lost on unlock).
@@ -513,8 +513,8 @@ test.describe("TestGoogleDriveSyncSection", () => {
 
     await connectBtn.click();
     await expect(pwaPage.locator("#vault-setup-modal")).toBeVisible({ timeout: 5_000 });
-    await pwaPage.fill("#vault-setup-passphrase", "1234");
-    await pwaPage.fill("#vault-setup-confirm", "1234");
+    await pwaPage.fill("#vault-setup-passphrase", "123456");
+    await pwaPage.fill("#vault-setup-confirm", "123456");
     await pwaPage.click('[data-action="do-setup-vault"]');
 
     const popup = await popupPromise;
@@ -536,7 +536,7 @@ test.describe("TestGoogleDriveSyncSection", () => {
     });
 
     await pwaPage.evaluate(async () => {
-      await window.API.setupVault("1234");
+      await window.API.setupVault("123456");
       window.API.lockVault();
     });
     await goSettings(pwaPage);
@@ -551,7 +551,7 @@ test.describe("TestGoogleDriveSyncSection", () => {
     await expect(pwaPage.locator(".toast.error")).toContainText(
       "Unlock your PIN before connecting Gmail.",
     );
-    await pwaPage.fill("#vault-unlock-passphrase", "1234");
+    await pwaPage.fill("#vault-unlock-passphrase", "123456");
     await pwaPage.click('[data-action="unlock-vault"]');
 
     const popup = await popupPromise;
@@ -938,7 +938,7 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 		await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
 		await page.evaluate(async () => {
 			localStorage.setItem("fincoach-onboarded", "true");
-			await window.API.setupVault("1234");
+			await window.API.setupVault("123456");
 			window.API.lockVault();
 		});
 		await page.route(/auth\/consume$/, async (route) => {
@@ -973,7 +973,7 @@ test.describe("TestiOSPWAOAuthRedirect", () => {
 		expect(hash).toBe("#/settings");
 
 		await expect(page.locator("#vault-unlock-screen")).toBeVisible({ timeout: 10_000 });
-		await page.fill("#vault-unlock-passphrase", "1234");
+		await page.fill("#vault-unlock-passphrase", "123456");
 		await page.click('[data-action="unlock-vault"]');
 		await expect(page.locator("#vault-unlock-screen")).toBeHidden({ timeout: 10_000 });
 

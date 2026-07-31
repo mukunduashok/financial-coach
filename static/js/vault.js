@@ -12,6 +12,7 @@ import {
   VAULT_BIOMETRIC_WRAPPED_KEY,
   VAULT_GMAIL_KEY,
   VAULT_PIN_KIND_KEY,
+  VAULT_PIN_VERSION_KEY,
   VAULT_SALT_KEY,
   VAULT_SENTINEL_KEY,
 } from "./config.js";
@@ -72,6 +73,10 @@ async function _hasBiometricPrfSupport() {
 
 function _isNumericPin(value) {
   return /^\d{4,}$/u.test(value);
+}
+
+function _isValidNewPin(value) {
+  return /^\d{6,}$/u.test(value);
 }
 
 async function _deriveKey(passphrase, salt) {
@@ -146,8 +151,8 @@ export const Vault = {
   },
 
   async setup(passphrase) {
-    if (!_isNumericPin(passphrase)) {
-      throw new Error("PIN must contain only digits and be at least 4 digits.");
+    if (!_isValidNewPin(passphrase)) {
+      throw new Error("PIN must contain only digits and be at least 6 digits.");
     }
     const salt = globalThis.crypto.getRandomValues(new Uint8Array(SALT_LENGTH));
     this._key = await _deriveKey(passphrase, salt);
@@ -155,6 +160,7 @@ export const Vault = {
     const encryptedSentinel = await this._encryptStr(SENTINEL);
     localStorage.setItem(VAULT_SENTINEL_KEY, encryptedSentinel);
     localStorage.setItem(VAULT_PIN_KIND_KEY, "numeric");
+    localStorage.setItem(VAULT_PIN_VERSION_KEY, "2");
   },
 
   async unlock(passphrase) {
@@ -236,14 +242,15 @@ export const Vault = {
     localStorage.removeItem(VAULT_AI_KEY);
     localStorage.removeItem(VAULT_GMAIL_KEY);
     localStorage.removeItem(VAULT_PIN_KIND_KEY);
+    localStorage.removeItem(VAULT_PIN_VERSION_KEY);
     this._key = null;
   },
 
   async changePassphrase(oldPassphrase, newPassphrase) {
     const ok = await this.unlock(oldPassphrase);
     if (!ok) throw new Error("Wrong passphrase");
-    if (!_isNumericPin(newPassphrase)) {
-      throw new Error("New PIN must contain only digits and be at least 4 digits.");
+    if (!_isValidNewPin(newPassphrase)) {
+      throw new Error("New PIN must contain only digits and be at least 6 digits.");
     }
 
     // Load existing encrypted blobs before re-keying
@@ -427,5 +434,9 @@ export const Vault = {
     localStorage.removeItem(VAULT_BIOMETRIC_LEGACY_WRAP_KEY);
     localStorage.removeItem(VAULT_BIOMETRIC_PRF_SALT_KEY);
     localStorage.removeItem(VAULT_BIOMETRIC_WRAPPED_KEY);
+  },
+
+  requiresPinUpgrade() {
+    return !localStorage.getItem(VAULT_PIN_VERSION_KEY);
   },
 };
