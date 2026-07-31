@@ -15,5 +15,6 @@ static/js/env.js
 # Test artifacts
 test-results/
 
-# Repo-local Hermes scripted workflow outputs
-.hermes/runs/
+# Repo-local Hermes scripted workflow files (internal agent tooling + plans)
+.hermes/
+.hermes.md
