@@ -49,6 +49,28 @@ test.describe("TestAccountsPage", () => {
   });
 });
 
+// FINCO-32 — empty-state CTA
+test.describe("TestAccountsEmptyStateCTA", () => {
+  test("empty accounts screen shows new copy and a visible CTA button", async ({ pwaPage }) => {
+    await goToAccounts(pwaPage);
+    await pwaPage.waitForSelector("#screen .empty-state");
+    const emptyText = await pwaPage.locator("#screen .empty-text").innerText();
+    expect(emptyText).toContain("No accounts yet");
+    const cta = pwaPage.locator('.empty-cta[data-action="show-create-account"]');
+    await expect(cta).toBeVisible();
+    expect((await cta.innerText()).trim()).toBe("Add your first account");
+  });
+
+  test("clicking the CTA opens the Create Account modal", async ({ pwaPage }) => {
+    await goToAccounts(pwaPage);
+    await pwaPage.waitForSelector("#screen .empty-state");
+    await pwaPage.locator('.empty-cta[data-action="show-create-account"]').click();
+    await pwaPage.waitForSelector(".modal-overlay .modal");
+    const modalTitle = await pwaPage.locator(".modal-overlay .modal .modal-title").innerText();
+    expect(modalTitle).toContain("Create Account");
+  });
+});
+
 test.describe("TestCreateAccount", () => {
   test("fab button visible", async ({ pwaPage }) => {
     await goToAccounts(pwaPage);

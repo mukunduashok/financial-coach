@@ -5,11 +5,13 @@ import { AI, AI_PROVIDERS } from "./ai.js";
  */
 import { API } from "./api.js";
 import {
+  BACKUP_NUDGE_INTERVAL_MS,
+  BACKUP_NUDGE_LAST_KEY,
+  BACKUP_NUDGE_MIN_EXPORT_AGE_MS,
   DAILY_SUMMARY_KEY,
   GDRIVE_BACKUP_API_KEY_KEY,
-  GDRIVE_REMINDER_INTERVAL_MS,
-  GDRIVE_REMINDER_KEY,
   GMAIL_AUTO_SYNC_ENABLED_KEY,
+  LAST_MANUAL_EXPORT_KEY,
   ONBOARDED_KEY,
   ONBOARDING_STEP_KEY,
   PRIVACY_MODE_KEY,
@@ -285,6 +287,9 @@ document.addEventListener("click", (e) => {
       break;
     case "export-transactions":
       exportTransactions(format);
+      break;
+    case "clear-tx-filters":
+      clearTxFilters();
       break;
     case "scroll-top":
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -822,6 +827,21 @@ const Theme = {
 // Toast notifications
 // ============================================================================
 
+/**
+ * Build markup for an empty-state placeholder with an optional primary CTA.
+ * Reuses the shared `.empty-state` component (icon + text) and adds an
+ * `.empty-cta` button only when both `actionLabel` and `action` are provided.
+ */
+function emptyStateHTML(icon, text, { actionLabel, action, route } = {}) {
+  const cta =
+    actionLabel && action
+      ? `<button class="btn btn-primary empty-cta" data-action="${action}"${
+          route ? ` data-route="${route}"` : ""
+        }>${escapeHtml(actionLabel)}</button>`
+      : "";
+  return `<div class="empty-state"><div class="empty-icon">${icon}</div><div class="empty-text">${escapeHtml(text)}</div>${cta}</div>`;
+}
+
 const Toast = {
   container: null,
 
@@ -873,6 +893,32 @@ const Toast = {
     closeBtn.textContent = "×";
     closeBtn.onclick = () => el.remove();
     el.append(span, actionBtn, closeBtn);
+    if (!this.container) this.init();
+    this.container.appendChild(el);
+    setTimeout(() => el.remove(), 8000);
+  },
+  infoActions(msg, actions) {
+    const el = document.createElement("div");
+    el.className = "toast info";
+    const span = document.createElement("span");
+    span.textContent = msg;
+    el.append(span);
+    for (const { label, fn } of actions) {
+      const actionBtn = document.createElement("button");
+      actionBtn.className = "btn btn-sm";
+      actionBtn.style.marginLeft = "var(--space-sm)";
+      actionBtn.textContent = label;
+      actionBtn.onclick = () => {
+        el.remove();
+        fn();
+      };
+      el.append(actionBtn);
+    }
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "toast-close";
+    closeBtn.textContent = "×";
+    closeBtn.onclick = () => el.remove();
+    el.append(closeBtn);
     if (!this.container) this.init();
     this.container.appendChild(el);
     setTimeout(() => el.remove(), 8000);
@@ -1337,6 +1383,30 @@ let txHasMore = true;
 let txLoading = false;
 let privacyRevealTimer = null;
 
+/** True when any transaction filter deviates from its default value. */
+function isTxFiltered() {
+  return (
+    txFilterState.transaction_type !== "" ||
+    txFilterState.account_id !== "" ||
+    txFilterState.category_id !== "" ||
+    (txFilterState.tag_ids && txFilterState.tag_ids.length > 0) ||
+    txFilterState.date_from !== firstOfMonthISO() ||
+    txFilterState.date_to !== todayISO()
+  );
+}
+
+/** Reset all transaction filters to their defaults and re-render the screen. */
+function clearTxFilters() {
+  txFilterState.date_from = firstOfMonthISO();
+  txFilterState.date_to = todayISO();
+  txFilterState.transaction_type = "";
+  txFilterState.account_id = "";
+  txFilterState.category_id = "";
+  txFilterState.show_merged_accounts = false;
+  txFilterState.tag_ids = [];
+  renderTransactions();
+}
+
 async function renderTransactions() {
   const screen = getScreen();
   screen.innerHTML = `<div class="spinner"></div>`;
@@ -1595,7 +1665,16 @@ async function loadTransactionList(reset = true) {
     const transactions = await API.getTransactions(params);
 
     if (reset && transactions.length === 0) {
-      container.innerHTML = `<div class="empty-state"><div class="empty-icon">📭</div><div class="empty-text">No transactions found</div></div>`;
+      container.innerHTML = isTxFiltered()
+        ? emptyStateHTML("🔍", "No transactions match your filters.", {
+            actionLabel: "Clear filters",
+            action: "clear-tx-filters",
+          })
+        : emptyStateHTML("📭", "No transactions yet. Add one to get started.", {
+            actionLabel: "Add your first transaction",
+            action: "nav-navigate",
+            route: "#/transactions/new",
+          });
       txLoading = false;
       return;
     }
@@ -2862,7 +2941,10 @@ async function renderAccounts() {
 
     if (topLevel.length === 0) {
       screen.innerHTML = `
-        <div class="empty-state"><div class="empty-icon">🏦</div><div class="empty-text">No accounts yet</div></div>
+        ${emptyStateHTML("🏦", "No accounts yet. Add one to start tracking balances.", {
+          actionLabel: "Add your first account",
+          action: "show-create-account",
+        })}
         <button class="fab" data-action="show-create-account" title="Add Account">+</button>
       `;
       return;
@@ -4686,10 +4768,10 @@ async function renderGoals() {
 
     if (goals.length === 0) {
       screen.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">🎯</div>
-          <div class="empty-text">No goals yet. Create one to start tracking!</div>
-        </div>
+        ${emptyStateHTML("🎯", "No savings goals yet. Set a target and watch your progress.", {
+          actionLabel: "Create your first goal",
+          action: "show-create-goal",
+        })}
         <button class="fab" data-action="show-create-goal" title="Add Goal">+</button>
       `;
       return;
@@ -5082,10 +5164,10 @@ async function renderBudgets() {
 
     if (budgets.length === 0) {
       screen.innerHTML = `
-        <div class="empty-state">
-          <div class="empty-icon">💰</div>
-          <div class="empty-text">No budgets yet. Create one to start tracking spending!</div>
-        </div>
+        ${emptyStateHTML("💰", "No budgets yet. Track your spending against monthly limits.", {
+          actionLabel: "Create your first budget",
+          action: "show-create-budget",
+        })}
         <button class="fab" data-action="show-create-budget" title="Add Budget">+</button>
       `;
       return;
@@ -6175,6 +6257,7 @@ async function exportBackup() {
   a.download = `fincoach-backup-${new Date().toISOString().split("T")[0]}.db`;
   a.click();
   URL.revokeObjectURL(url);
+  localStorage.setItem(LAST_MANUAL_EXPORT_KEY, String(Date.now()));
 }
 
 async function loadSampleData() {
@@ -6646,15 +6729,26 @@ async function onboardingConnectGmail() {
 // ============================================================================
 
 function checkGDriveReminder() {
-  if (GDrive.isEnabled()) return;
-  const last = Number(localStorage.getItem(GDRIVE_REMINDER_KEY) || "0");
-  if (last > 0 && Date.now() - last < GDRIVE_REMINDER_INTERVAL_MS) return;
-  localStorage.setItem(GDRIVE_REMINDER_KEY, String(Date.now()));
-  Toast.infoAction(
-    "Back up your data — Google Drive sync is not enabled.",
-    "Enable in Settings",
-    () => Router.navigate("#/settings"),
-  );
+  const SESSION_KEY = "fincoach-backup-nudge-session";
+  try {
+    if (GDrive.isEnabled()) return;
+    // Skip if the user manually exported a backup within the last 30 days.
+    const lastExport = Number(localStorage.getItem(LAST_MANUAL_EXPORT_KEY) || "0");
+    if (Date.now() - lastExport < BACKUP_NUDGE_MIN_EXPORT_AGE_MS) return;
+    // At most once per session.
+    if (sessionStorage.getItem(SESSION_KEY)) return;
+    // At most once every 7 days.
+    const last = Number(localStorage.getItem(BACKUP_NUDGE_LAST_KEY) || "0");
+    if (last > 0 && Date.now() - last < BACKUP_NUDGE_INTERVAL_MS) return;
+    sessionStorage.setItem(SESSION_KEY, "1");
+    localStorage.setItem(BACKUP_NUDGE_LAST_KEY, String(Date.now()));
+    Toast.infoActions("Back up your data — it only lives in this browser.", [
+      { label: "Export backup now", fn: () => exportBackup() },
+      { label: "Enable Drive sync", fn: () => Router.navigate("#/settings") },
+    ]);
+  } catch {
+    // The backup nudge must never crash the boot path.
+  }
 }
 
 async function checkDailySummary() {
@@ -7101,4 +7195,11 @@ Object.assign(window, {
   detectPaymentType,
   doUnlockWithBiometric,
   doSetupBiometric,
+  // Exposed for test access
+  Toast,
+  emptyStateHTML,
+  exportBackup,
+  checkGDriveReminder,
+  clearTxFilters,
+  txFilterState,
 });

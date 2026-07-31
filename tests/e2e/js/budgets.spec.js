@@ -26,6 +26,32 @@ test.describe("TestBudgetsPage", () => {
   });
 });
 
+// FINCO-32 — empty-state CTA
+test.describe("TestBudgetsEmptyStateCTA", () => {
+  test("empty budgets screen shows new copy and a visible CTA button", async ({ pwaPage }) => {
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/budgets";
+    });
+    await pwaPage.waitForSelector("#screen .empty-state");
+    const emptyText = await pwaPage.locator("#screen .empty-text").innerText();
+    expect(emptyText).toContain("No budgets yet");
+    const cta = pwaPage.locator('.empty-cta[data-action="show-create-budget"]');
+    await expect(cta).toBeVisible();
+    expect((await cta.innerText()).trim()).toBe("Create your first budget");
+  });
+
+  test("clicking the CTA opens the Create Budget modal", async ({ pwaPage }) => {
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/budgets";
+    });
+    await pwaPage.waitForSelector("#screen .empty-state");
+    await pwaPage.locator('.empty-cta[data-action="show-create-budget"]').click();
+    await pwaPage.waitForSelector(".modal-overlay .modal");
+    const modalTitle = await pwaPage.locator(".modal-overlay .modal .modal-title").innerText();
+    expect(modalTitle).toContain("Create Budget");
+  });
+});
+
 test.describe("TestCreateBudget", () => {
   test("create budget modal", async ({ pwaPage }) => {
     await pwaPage.evaluate(() => {

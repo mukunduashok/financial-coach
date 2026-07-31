@@ -45,9 +45,12 @@ export const SESSION_EXPIRY_MS = 6 * 60 * 60 * 1000; // 21_600_000
 export const ONBOARDED_KEY = "fincoach-onboarded";
 export const ONBOARDING_STEP_KEY = "fincoach-onboarding-step";
 
-// Google Drive backup reminder
-export const GDRIVE_REMINDER_KEY = "fincoach-gdrive-reminder-last";
-export const GDRIVE_REMINDER_INTERVAL_MS = 5 * 24 * 60 * 60 * 1000; // 5 days
+// Backup reminder nudge — for users without Drive auto-sync who also
+// haven't manually exported a backup recently.
+export const LAST_MANUAL_EXPORT_KEY = "fincoach-last-manual-export";
+export const BACKUP_NUDGE_LAST_KEY = "fincoach-backup-nudge-last";
+export const BACKUP_NUDGE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const BACKUP_NUDGE_MIN_EXPORT_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // Gmail auto-sync
 export const GMAIL_AUTO_SYNC_ENABLED_KEY = "fincoach-gmail-auto-sync-enabled";

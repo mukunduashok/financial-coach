@@ -25,6 +25,29 @@ All routes are registered at the bottom of `app.js` using `Router.register(hash,
 | `#/taxonomy` | `renderTaxonomy()` | Taxonomy browser for categories tab, merchants tab, and tags tab |
 | `#/settings` | `renderSettings()` | Settings panel for AI provider configuration, data export/import, Google Drive sync, session security, trusted device. Has a `<footer class="settings-legal-footer">` with links to `/privacy.html` and `/terms.html` (both open in new tab). |
 
+### Empty-state CTAs (FINCO-32)
+
+`emptyStateHTML(icon, text, {actionLabel, action, route})` renders a shared
+`.empty-state` block with an optional primary `.empty-cta` button (only when both
+`actionLabel` and `action` are supplied; `data-route` added only when `route` set).
+Empty branches with a CTA: Budgets (`show-create-budget`), Goals (`show-create-goal`),
+Accounts (`show-create-account`), Transactions unfiltered (`nav-navigate` →
+`#/transactions/new`) and filtered-no-match (`clear-tx-filters`). The
+`clear-tx-filters` data-action resets `txFilterState` to defaults and re-renders;
+`isTxFiltered()` detects any non-default filter (type/account/category/tags or a
+date range other than first-of-month..today).
+
+### Backup reminder nudge (FINCO-33)
+
+`checkGDriveReminder()` runs after `db-ready` on dashboard boot (never throws). It
+shows a two-action `Toast.infoActions` nudge ("Export backup now" → `exportBackup()`;
+"Enable Drive sync" → `Router.navigate("#/settings")`) only when ALL are true: Drive
+auto-sync disabled, no manual export within 30 days (`BACKUP_NUDGE_MIN_EXPORT_AGE_MS`),
+not already shown this session (`sessionStorage["fincoach-backup-nudge-session"]`), and
+last nudge > 7 days ago (`BACKUP_NUDGE_INTERVAL_MS`). `exportBackup()` records
+`LAST_MANUAL_EXPORT_KEY = Date.now()` after a successful `.db` export;
+`wipeSession()` clears `LAST_MANUAL_EXPORT_KEY` and `BACKUP_NUDGE_LAST_KEY`.
+
 ## Database Methods (DB singleton in db.js)
 
 All database operations are available through the `DB` object exported from `static/js/db.js`.
@@ -576,6 +599,8 @@ All application configuration is stored in `localStorage` using these standardiz
 | `GDRIVE_ENABLED_KEY` | `fincoach-gdrive-enabled` | Drive sync on/off |
 | `GDRIVE_LAST_SYNC_KEY` | `fincoach-gdrive-last-sync` | Last sync timestamp |
 | `GDRIVE_BACKUP_API_KEY_KEY` | `fincoach-gdrive-backup-api-key` | Include API key in backup |
+| `LAST_MANUAL_EXPORT_KEY` | `fincoach-last-manual-export` | Timestamp of last manual `.db` backup export |
+| `BACKUP_NUDGE_LAST_KEY` | `fincoach-backup-nudge-last` | Timestamp of last backup-reminder nudge (7-day throttle) |
 | `VAULT_PIN_KIND_KEY` | `fincoach-vault-pin-kind` | `"numeric"` when vault uses numeric PIN |
 | `VAULT_PIN_VERSION_KEY` | `fincoach-vault-pin-version` | `"2"` written on setup; absent = legacy <6-digit PIN (upgrade required) |
 | `ONBOARDED_KEY` | `fincoach-onboarded` | User completed onboarding |

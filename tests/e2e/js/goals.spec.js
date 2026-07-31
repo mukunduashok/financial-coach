@@ -34,7 +34,7 @@ test.describe("TestGoalsPage", () => {
 
   test("goals empty state", async ({ pwaPage }) => {
     const text = await pwaPage.innerText("body");
-    expect(text.toLowerCase()).toContain("no goals");
+    expect(text.toLowerCase()).toContain("no savings goals");
   });
 
   test("goals show seeded data", async ({ pwaPage }) => {
@@ -50,6 +50,28 @@ test.describe("TestGoalsPage", () => {
   test("fab button visible", async ({ pwaPage }) => {
     const fab = pwaPage.locator("button.fab");
     expect(await fab.count()).toBeGreaterThan(0);
+  });
+});
+
+// FINCO-32 — empty-state CTA
+test.describe("TestGoalsEmptyStateCTA", () => {
+  test("empty goals screen shows new copy and a visible CTA button", async ({ pwaPage }) => {
+    await goToGoals(pwaPage);
+    await pwaPage.waitForSelector("#screen .empty-state");
+    const emptyText = await pwaPage.locator("#screen .empty-text").innerText();
+    expect(emptyText).toContain("No savings goals yet");
+    const cta = pwaPage.locator('.empty-cta[data-action="show-create-goal"]');
+    await expect(cta).toBeVisible();
+    expect((await cta.innerText()).trim()).toBe("Create your first goal");
+  });
+
+  test("clicking the CTA opens the Create Goal modal", async ({ pwaPage }) => {
+    await goToGoals(pwaPage);
+    await pwaPage.waitForSelector("#screen .empty-state");
+    await pwaPage.locator('.empty-cta[data-action="show-create-goal"]').click();
+    await pwaPage.waitForSelector(".modal-overlay .modal");
+    const modalText = (await pwaPage.locator(".modal-overlay .modal").innerText()).toLowerCase();
+    expect(modalText).toContain("create goal");
   });
 });
 

@@ -3207,3 +3207,225 @@ describe("Gmail connect vault gating", () => {
 		).toBe(false);
 	});
 });
+
+// ===========================================================================
+// FINCO-32 — Empty state messages with CTAs
+// ===========================================================================
+describe("FINCO-32: empty-state helper and screen CTAs", () => {
+	it("emptyStateHTML renders icon, escaped text, and a CTA button", () => {
+		const html = window.emptyStateHTML("🎯", "No <b>goals</b> yet", {
+			actionLabel: "Create goal",
+			action: "show-create-goal",
+		});
+		expect(html).toContain("empty-state");
+		expect(html).toContain("🎯");
+		expect(html).toContain("&lt;b&gt;goals&lt;/b&gt;");
+		expect(html).toContain('data-action="show-create-goal"');
+		expect(html).toContain("empty-cta");
+		expect(html).toContain("Create goal");
+	});
+
+	it("emptyStateHTML adds data-route only when route is provided", () => {
+		const withRoute = window.emptyStateHTML("📭", "None", {
+			actionLabel: "Add",
+			action: "nav-navigate",
+			route: "#/transactions/new",
+		});
+		expect(withRoute).toContain('data-route="#/transactions/new"');
+		const noRoute = window.emptyStateHTML("📭", "None", {
+			actionLabel: "Add",
+			action: "show-create-budget",
+		});
+		expect(noRoute).not.toContain("data-route");
+	});
+
+	it("emptyStateHTML omits the button when no actionLabel/action", () => {
+		const html = window.emptyStateHTML("📭", "Nothing here");
+		expect(html).not.toContain("empty-cta");
+		expect(html).not.toContain("<button");
+		expect(html).toContain("Nothing here");
+	});
+
+	it("budgets empty screen shows a create-budget CTA", async () => {
+		mockAPI.getBudgets.mockResolvedValue([]);
+		await window.Router.routes["#/budgets"]();
+		const cta = document
+			.getElementById("screen")
+			.querySelector('.empty-cta[data-action="show-create-budget"]');
+		expect(cta).not.toBeNull();
+		expect(cta.textContent).toContain("Create your first budget");
+	});
+
+	it("goals empty screen shows a create-goal CTA", async () => {
+		mockAPI.getGoals.mockResolvedValue([]);
+		await window.Router.routes["#/goals"]();
+		const cta = document
+			.getElementById("screen")
+			.querySelector('.empty-cta[data-action="show-create-goal"]');
+		expect(cta).not.toBeNull();
+		expect(cta.textContent).toContain("Create your first goal");
+	});
+
+	it("accounts empty screen shows an add-account CTA", async () => {
+		mockAPI.getAccounts.mockResolvedValue([]);
+		await window.Router.routes["#/accounts"]();
+		const cta = document
+			.getElementById("screen")
+			.querySelector('.empty-cta[data-action="show-create-account"]');
+		expect(cta).not.toBeNull();
+		expect(cta.textContent).toContain("Add your first account");
+	});
+
+	it("transactions empty (unfiltered) shows an add-transaction CTA", async () => {
+		mockAPI.getTransactions.mockResolvedValue([]);
+		window.clearTxFilters();
+		await vi.waitFor(() => {
+			const cta = document
+				.getElementById("tx-list-container")
+				?.querySelector('.empty-cta[data-action="nav-navigate"]');
+			expect(cta).not.toBeNull();
+			expect(cta.getAttribute("data-route")).toBe("#/transactions/new");
+		});
+	});
+
+	it("transactions empty (filtered) shows a clear-filters CTA", async () => {
+		mockAPI.getTransactions.mockResolvedValue([]);
+		await window.Router.routes["#/transactions"]();
+		window.txFilterState.transaction_type = "expense";
+		await window.Router.routes["#/transactions"]();
+		const cta = document
+			.getElementById("tx-list-container")
+			.querySelector('.empty-cta[data-action="clear-tx-filters"]');
+		expect(cta).not.toBeNull();
+		expect(cta.textContent).toContain("Clear filters");
+	});
+
+	it("clear-tx-filters resets txFilterState to defaults and re-renders", async () => {
+		mockAPI.getTransactions.mockResolvedValue([]);
+		await window.Router.routes["#/transactions"]();
+		window.txFilterState.transaction_type = "income";
+		window.txFilterState.account_id = "5";
+		window.txFilterState.category_id = "3";
+		window.txFilterState.tag_ids = [1, 2];
+		await window.Router.routes["#/transactions"]();
+		const cta = document
+			.getElementById("tx-list-container")
+			.querySelector('.empty-cta[data-action="clear-tx-filters"]');
+		cta.click();
+		await vi.waitFor(() => {
+			expect(window.txFilterState.transaction_type).toBe("");
+			expect(window.txFilterState.account_id).toBe("");
+			expect(window.txFilterState.category_id).toBe("");
+			expect(window.txFilterState.tag_ids).toEqual([]);
+			const unfiltered = document
+				.getElementById("tx-list-container")
+				?.querySelector('.empty-cta[data-action="nav-navigate"]');
+			expect(unfiltered).not.toBeNull();
+		});
+	});
+});
+
+// ===========================================================================
+// FINCO-33 — Backup reminder nudge
+// ===========================================================================
+describe("FINCO-33: backup reminder nudge", () => {
+	const SESSION_KEY = "fincoach-backup-nudge-session";
+	const EXPORT_KEY = "fincoach-last-manual-export";
+	const NUDGE_KEY = "fincoach-backup-nudge-last";
+
+	beforeEach(() => {
+		window.Toast.clearAll();
+		localStorage.removeItem(EXPORT_KEY);
+		localStorage.removeItem(NUDGE_KEY);
+		sessionStorage.removeItem(SESSION_KEY);
+		vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("Toast.infoActions renders one button per action", () => {
+		window.Toast.clearAll();
+		window.Toast.infoActions("msg", [
+			{ label: "A", fn: vi.fn() },
+			{ label: "B", fn: vi.fn() },
+		]);
+		const toast = document.querySelector(".toast.info");
+		const btns = toast.querySelectorAll(".btn-sm");
+		expect(btns.length).toBe(2);
+		expect(btns[0].textContent).toBe("A");
+		expect(btns[1].textContent).toBe("B");
+	});
+
+	it("Toast.infoActions button click invokes its fn and removes the toast", () => {
+		window.Toast.clearAll();
+		const fn = vi.fn();
+		window.Toast.infoActions("msg", [{ label: "Go", fn }]);
+		const toast = document.querySelector(".toast.info");
+		toast.querySelector(".btn-sm").click();
+		expect(fn).toHaveBeenCalledTimes(1);
+		expect(document.body.contains(toast)).toBe(false);
+	});
+
+	it("exportBackup sets LAST_MANUAL_EXPORT_KEY to a recent timestamp", async () => {
+		const before = Date.now();
+		await window.exportBackup();
+		const ts = Number(localStorage.getItem(EXPORT_KEY));
+		expect(ts).toBeGreaterThanOrEqual(before);
+	});
+
+	it("no toast when Drive sync is enabled", () => {
+		GDrive.isEnabled.mockReturnValue(true);
+		const spy = vi.spyOn(window.Toast, "infoActions");
+		window.checkGDriveReminder();
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("no toast when exported within the last 30 days", () => {
+		localStorage.setItem(EXPORT_KEY, String(Date.now() - 1000));
+		const spy = vi.spyOn(window.Toast, "infoActions");
+		window.checkGDriveReminder();
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("no toast when a nudge was shown within the last 7 days", () => {
+		localStorage.setItem(NUDGE_KEY, String(Date.now() - 1000));
+		const spy = vi.spyOn(window.Toast, "infoActions");
+		window.checkGDriveReminder();
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("no toast when already shown this session", () => {
+		sessionStorage.setItem(SESSION_KEY, "1");
+		const spy = vi.spyOn(window.Toast, "infoActions");
+		window.checkGDriveReminder();
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("shows a two-button toast when all conditions are met", () => {
+		const spy = vi.spyOn(window.Toast, "infoActions");
+		window.checkGDriveReminder();
+		expect(spy).toHaveBeenCalledTimes(1);
+		const [msg, actions] = spy.mock.calls[0];
+		expect(msg).toContain("Back up your data");
+		expect(actions.map((a) => a.label)).toEqual([
+			"Export backup now",
+			"Enable Drive sync",
+		]);
+		// Persists the throttle + session guard
+		expect(localStorage.getItem(NUDGE_KEY)).not.toBeNull();
+		expect(sessionStorage.getItem(SESSION_KEY)).toBe("1");
+	});
+
+	it("Export backup now action triggers a backup and Enable Drive sync navigates", () => {
+		const navSpy = vi.spyOn(window.Router, "navigate").mockImplementation(() => {});
+		window.checkGDriveReminder();
+		const toast = document.querySelector(".toast.info");
+		const btns = toast.querySelectorAll(".btn-sm");
+		expect(btns[0].textContent).toBe("Export backup now");
+		expect(btns[1].textContent).toBe("Enable Drive sync");
+		btns[1].click();
+		expect(navSpy).toHaveBeenCalledWith("#/settings");
+	});
+});

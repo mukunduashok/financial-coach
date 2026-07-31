@@ -82,3 +82,54 @@ test.describe("TestDashboard", () => {
     expect(hasTransactions || text.length > 200).toBeTruthy();
   });
 });
+
+// FINCO-33 — backup reminder nudge (checkGDriveReminder runs on dashboard boot)
+test.describe("TestBackupNudge", () => {
+  const NUDGE_TOAST = '.toast.info:has-text("Back up your data")';
+
+  // Boots the app with Playwright's default fresh context (Drive disabled, no
+  // export/throttle keys), optionally seeding localStorage before any script runs.
+  async function boot(page, initKeys = {}) {
+    await page.addInitScript((keys) => {
+      localStorage.setItem("fincoach-onboarded", "true");
+      for (const [k, v] of Object.entries(keys)) {
+        localStorage.setItem(k, v);
+      }
+    }, initKeys);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
+  }
+
+  test("shows a two-action nudge on a fresh install with Drive disabled", async ({ page }) => {
+    await boot(page);
+    const toast = page.locator(NUDGE_TOAST);
+    await expect(toast).toBeVisible();
+    await expect(toast.locator('.btn-sm:has-text("Export backup now")')).toBeVisible();
+    await expect(toast.locator('.btn-sm:has-text("Enable Drive sync")')).toBeVisible();
+  });
+
+  test("clicking Enable Drive sync navigates to Settings", async ({ page }) => {
+    await boot(page);
+    const toast = page.locator(NUDGE_TOAST);
+    await expect(toast).toBeVisible();
+    await toast.locator('.btn-sm:has-text("Enable Drive sync")').click();
+    await page.waitForFunction(() => window.location.hash === "#/settings");
+    expect(await page.evaluate(() => window.location.hash)).toBe("#/settings");
+  });
+
+  test("does not re-show within the same session after a reload", async ({ page }) => {
+    await boot(page);
+    await expect(page.locator(NUDGE_TOAST)).toBeVisible();
+    // sessionStorage persists across reloads in the same browser context.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
+    await page.waitForTimeout(400);
+    expect(await page.locator(NUDGE_TOAST).count()).toBe(0);
+  });
+
+  test("is suppressed when a manual export happened within 30 days", async ({ page }) => {
+    await boot(page, { "fincoach-last-manual-export": String(Date.now()) });
+    await page.waitForTimeout(400);
+    expect(await page.locator(NUDGE_TOAST).count()).toBe(0);
+  });
+});

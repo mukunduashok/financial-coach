@@ -45,3 +45,27 @@ describe("config GMAIL_PROXY_URL resolution", () => {
 		expect(GMAIL_PROXY_URL).toBe(DEFAULT_PROXY_URL);
 	});
 });
+
+describe("config backup nudge constants (FINCO-33)", () => {
+	it("exports the localStorage key names", async () => {
+		const config = await import("../../static/js/config.js");
+		expect(config.LAST_MANUAL_EXPORT_KEY).toBe("fincoach-last-manual-export");
+		expect(config.BACKUP_NUDGE_LAST_KEY).toBe("fincoach-backup-nudge-last");
+	});
+
+	it("uses a 7-day nudge interval", async () => {
+		const { BACKUP_NUDGE_INTERVAL_MS } = await import("../../static/js/config.js");
+		expect(BACKUP_NUDGE_INTERVAL_MS).toBe(7 * 24 * 60 * 60 * 1000);
+	});
+
+	it("uses a 30-day minimum export age", async () => {
+		const { BACKUP_NUDGE_MIN_EXPORT_AGE_MS } = await import("../../static/js/config.js");
+		expect(BACKUP_NUDGE_MIN_EXPORT_AGE_MS).toBe(30 * 24 * 60 * 60 * 1000);
+	});
+
+	it("no longer exports the retired GDrive reminder constants", async () => {
+		const config = await import("../../static/js/config.js");
+		expect(config.GDRIVE_REMINDER_KEY).toBeUndefined();
+		expect(config.GDRIVE_REMINDER_INTERVAL_MS).toBeUndefined();
+	});
+});

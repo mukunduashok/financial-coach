@@ -4136,7 +4136,8 @@ describe("Session Wipe", () => {
 			"fincoach-gmail-auto-sync-last",
 			"fincoach-onboarded",
 			"fincoach-onboarding-step",
-			"fincoach-gdrive-reminder-last",
+			"fincoach-last-manual-export",
+			"fincoach-backup-nudge-last",
 			"fincoach-daily-summary-last",
 		];
 		for (const k of sensitiveKeys) {
@@ -4170,7 +4171,8 @@ describe("Session Wipe", () => {
 		["fincoach-gmail-auto-sync-last", "GMAIL_AUTO_SYNC_LAST_KEY"],
 		["fincoach-onboarded", "ONBOARDED_KEY"],
 		["fincoach-onboarding-step", "ONBOARDING_STEP_KEY"],
-		["fincoach-gdrive-reminder-last", "GDRIVE_REMINDER_KEY"],
+		["fincoach-last-manual-export", "LAST_MANUAL_EXPORT_KEY"],
+		["fincoach-backup-nudge-last", "BACKUP_NUDGE_LAST_KEY"],
 		["fincoach-daily-summary-last", "DAILY_SUMMARY_KEY"],
 	];
 

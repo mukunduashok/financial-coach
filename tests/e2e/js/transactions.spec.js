@@ -124,6 +124,60 @@ test.describe("TestTransactionFilters", () => {
   });
 });
 
+// FINCO-32 — empty-state CTAs
+test.describe("TestTransactionsEmptyStateCTA", () => {
+  test("empty DB shows an Add-your-first-transaction CTA that navigates to the new form", async ({
+    pwaPage,
+  }) => {
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/transactions";
+    });
+    await pwaPage.waitForSelector("#tx-list-container .empty-state");
+    const emptyText = await pwaPage.locator("#tx-list-container .empty-text").innerText();
+    expect(emptyText).toContain("No transactions yet");
+    const cta = pwaPage.locator('#tx-list-container .empty-cta[data-action="nav-navigate"]');
+    await expect(cta).toBeVisible();
+    expect(await cta.getAttribute("data-route")).toBe("#/transactions/new");
+    expect((await cta.innerText()).trim()).toBe("Add your first transaction");
+
+    await cta.click();
+    await pwaPage.waitForFunction(() => window.location.hash === "#/transactions/new");
+    expect(await pwaPage.evaluate(() => window.location.hash)).toBe("#/transactions/new");
+  });
+
+  test("filter that matches nothing shows a Clear-filters CTA that restores the list", async ({
+    pwaPage,
+  }) => {
+    await seedTransactionData(pwaPage);
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/transactions";
+    });
+    await pwaPage.waitForSelector("#tx-list-container .tx-item");
+
+    // Apply a future date range that matches none of the seeded transactions.
+    await pwaPage.evaluate(() => {
+      const from = document.getElementById("f-from");
+      const to = document.getElementById("f-to");
+      from.value = "2099-01-01";
+      to.value = "2099-12-31";
+      to.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    await pwaPage.waitForSelector('#tx-list-container .empty-cta[data-action="clear-tx-filters"]');
+    const emptyText = await pwaPage.locator("#tx-list-container .empty-text").innerText();
+    expect(emptyText).toContain("No transactions match your filters.");
+    const clearCta = pwaPage.locator('#tx-list-container .empty-cta[data-action="clear-tx-filters"]');
+    expect((await clearCta.innerText()).trim()).toBe("Clear filters");
+
+    await clearCta.click();
+    // clearTxFilters re-renders the whole screen; the seeded rows return.
+    await pwaPage.waitForSelector("#tx-list-container .tx-item");
+    const text = await pwaPage.innerText("#tx-list-container");
+    const restored = ["grocery", "salary", "uber"].some((k) => text.toLowerCase().includes(k));
+    expect(restored).toBeTruthy();
+  });
+});
+
 test.describe("TestTransactionPDFExport", () => {
   test("no PDF export button in transactions toolbar (moved to Settings)", async ({ pwaPage }) => {
     await pwaPage.evaluate(() => {
