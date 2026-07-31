@@ -6441,9 +6441,14 @@ async function saveAISettings() {
   }
 
   Toast.show("Settings saved", "success");
-  if (status) {
-    status.textContent = "✓ Settings saved";
-    status.className = "settings-status success";
+  if (Router.currentScreen === "#/settings") {
+    await renderSettings();
+  }
+  // Re-query after re-render — the old status node was detached by innerHTML.
+  const savedStatus = document.getElementById("settings-status");
+  if (savedStatus) {
+    savedStatus.textContent = "✓ Settings saved";
+    savedStatus.className = "settings-status success";
   }
 }
 

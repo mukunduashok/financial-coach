@@ -5,7 +5,11 @@ async function goToAccounts(page) {
   await page.evaluate(() => {
     window.location.hash = "#/accounts";
   });
-  await page.waitForSelector("#screen");
+  // Wait for the accounts screen to finish its async render instead of the
+  // persistent #screen container. The Add-Account FAB is emitted at the end of
+  // renderAccounts() for both the populated and empty states, so its presence
+  // proves the spinner was replaced and the real content is on the page.
+  await page.waitForSelector("#screen .fab[data-action='show-create-account']");
 }
 
 async function createAccountViaDb(page, name, accountType, balance = 0) {
@@ -277,9 +281,10 @@ test.describe("TestMergeAccounts", () => {
     await pwaPage.locator("#merge-source").selectOption(String(acctS.id));
     await pwaPage.locator("#merge-target").selectOption(String(acctC.id));
     await pwaPage.locator(".modal-overlay button:has-text('Merge')").click();
-    await pwaPage.waitForTimeout(300);
 
-    expect(await pwaPage.locator(".modal-overlay").count()).toBeGreaterThan(0);
+    // A type mismatch is rejected: an error toast appears and the modal stays open.
+    await expect(pwaPage.locator(".toast.error")).toContainText("same account type");
+    await expect(pwaPage.locator(".modal-overlay")).toBeVisible();
   });
 });
 
@@ -613,8 +618,7 @@ test.describe("TestDeleteAccount", () => {
     await createAccountViaDb(pwaPage, "Delete Me Acct", "debit", 0);
 
     await goToAccounts(pwaPage);
-    const text = await pwaPage.innerText("body");
-    expect(text.toLowerCase()).toContain("delete me acct");
+    await expect(pwaPage.locator("#screen")).toContainText("Delete Me Acct");
 
     const card = pwaPage.locator(".card:has-text('Delete Me Acct')");
     const deleteBtn = card.locator("button[title='Delete']");
@@ -628,8 +632,7 @@ test.describe("TestDeleteAccount", () => {
         getComputedStyle(document.querySelector(".modal-overlay")).display === "none",
     );
 
-    const textAfter = await pwaPage.innerText("body");
-    expect(textAfter.toLowerCase()).not.toContain("delete me acct");
+    await expect(pwaPage.locator("#screen")).not.toContainText("Delete Me Acct");
   });
 });
 
@@ -642,8 +645,8 @@ test.describe("TestBUGPROD03BalanceNotYetSynced", () => {
 	}) => {
 		await createAccountViaDb(pwaPage, "BUGFIX Savings", "savings", 25000);
 		await goToAccounts(pwaPage);
-		const text = await pwaPage.innerText("body");
-		expect(text.toLowerCase()).toContain("bugfix savings");
+		await expect(pwaPage.locator("#screen")).toContainText("BUGFIX Savings");
+		const text = await pwaPage.locator("#screen").innerText();
 		expect(text).not.toContain("Balance not yet synced");
 		// Should display formatted balance
 		expect(text).toMatch(/25[,.]?000/);

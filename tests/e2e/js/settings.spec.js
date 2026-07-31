@@ -5,7 +5,11 @@ async function goSettings(page) {
   await page.evaluate(() => {
     window.location.hash = "#/settings";
   });
-  await page.waitForSelector("#screen");
+  // Wait for the settings screen to finish its async render rather than the
+  // persistent #screen container. renderSettings() sets #screen.innerHTML in a
+  // single assignment after all awaits, so once #ai-provider exists the whole
+  // form is present and cannot be a stale/partial render.
+  await page.waitForSelector("#ai-provider");
 }
 
 async function getOptionValues(locator) {
@@ -154,7 +158,9 @@ test.describe("TestSettingsPage", () => {
     await goSettings(page);
     // Configure the AI provider + model + API key via the Settings form.
     await page.selectOption("#ai-provider", "groq");
-    await page.waitForTimeout(200);
+    // Groq re-enables the model input (Azure disables it) — wait for that state
+    // rather than a fixed delay before filling.
+    await expect(page.locator("#ai-model")).toBeEnabled();
     await page.fill("#ai-model", "llama-3.1-8b-instant");
     await page.fill("#ai-api-key", "sk-live-groq-key");
     await page.locator("button:has-text('Save Settings')").click();
@@ -282,14 +288,10 @@ test.describe("TestAzureProviderSettings", () => {
 
   test("azure fields hidden when switching away", async ({ pwaPage }) => {
     await pwaPage.selectOption("#ai-provider", "azure");
-    await pwaPage.waitForTimeout(300);
+    await expect(pwaPage.locator("#azure-fields")).toBeVisible();
 
     await pwaPage.selectOption("#ai-provider", "groq");
-    await pwaPage.waitForTimeout(300);
-
-    const azureFields = pwaPage.locator("#azure-fields");
-    const display = await azureFields.evaluate((el) => getComputedStyle(el).display);
-    expect(display).toBe("none");
+    await expect(pwaPage.locator("#azure-fields")).toBeHidden();
   });
 
   test("model dropdown disabled for azure", async ({ pwaPage }) => {
@@ -1173,5 +1175,110 @@ test.describe("TestLegalFooter", () => {
 		const link = pwaPage.locator(".settings-legal-footer a:has-text('Terms of Service')");
 		expect(await link.getAttribute("href")).toBe("/terms.html");
 		expect(await link.getAttribute("target")).toBe("_blank");
+	});
+});
+
+// ===========================================================================
+// FINCO-78: External-AI consent control appears immediately after saving AI
+// settings — no reload or manual navigation required. Regression guard for the
+// bug where the Review/Revoke Consent button only appeared after a page reload.
+// ===========================================================================
+test.describe("TestFINCO78ConsentControlAfterSave", () => {
+	const reviewConsentBtn = '[data-action="review-ai-consent"]';
+	const revokeConsentBtn = '[data-action="revoke-ai-consent"]';
+
+	test.beforeEach(async ({ pwaPage }) => {
+		await goSettings(pwaPage);
+	});
+
+	test("consent control is not shown on a fresh DB with no provider configured", async ({
+		pwaPage,
+	}) => {
+		// Provider select defaults to the empty option — no external provider saved yet.
+		await expect(pwaPage.locator("#ai-provider")).toHaveValue("");
+		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
+		await expect(pwaPage.locator(revokeConsentBtn)).toHaveCount(0);
+	});
+
+	test("saving an external provider (no key) reveals Review Consent without reload", async ({
+		pwaPage,
+	}) => {
+		// Consent control is absent before saving.
+		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
+
+		// Select Groq (external) but leave the key blank so the save reaches the success
+		// path (a key would require the vault). The provider is persisted publicly.
+		await pwaPage.selectOption("#ai-provider", "groq");
+		await pwaPage.waitForTimeout(300);
+
+		await pwaPage.locator("button:has-text('Save Settings')").click();
+
+		// The re-render fires from saveAISettings() — the button must appear WITHOUT any
+		// reload or manual navigation.
+		await expect(pwaPage.locator(reviewConsentBtn)).toBeVisible({ timeout: 5_000 });
+
+		// Confirmation is surfaced via both the status line and a toast.
+		await expect(pwaPage.locator("#settings-status")).toContainText("saved", { timeout: 5_000 });
+		await expect(pwaPage.locator(".toast.success")).toContainText(/saved/i, { timeout: 5_000 });
+
+		// The hash did not change (no navigation) and no reload occurred.
+		const hash = await pwaPage.evaluate(() => window.location.hash);
+		expect(hash).toContain("#/settings");
+	});
+
+	test("saving an external provider with a key (vault unlocked) reveals Review Consent", async ({
+		pwaPage,
+	}) => {
+		// Configure and unlock the vault so a secret key save reaches the success path.
+		await pwaPage.evaluate(async () => {
+			await window.API.setupVault("123456");
+		});
+		await goSettings(pwaPage);
+
+		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
+
+		await pwaPage.selectOption("#ai-provider", "openai");
+		await pwaPage.waitForTimeout(300);
+		await pwaPage.fill("#ai-api-key", "sk-test-openai-key");
+		await pwaPage.locator("button:has-text('Save Settings')").click();
+
+		// Consent control appears immediately after the successful save re-render.
+		await expect(pwaPage.locator(reviewConsentBtn)).toBeVisible({ timeout: 5_000 });
+		await expect(pwaPage.locator("#settings-status")).toContainText("saved", { timeout: 5_000 });
+	});
+
+	test("saving Ollama (local-only) shows no consent control", async ({ pwaPage }) => {
+		await pwaPage.selectOption("#ai-provider", "ollama");
+		await pwaPage.waitForTimeout(300);
+
+		await pwaPage.locator("button:has-text('Save Settings')").click();
+
+		// Save succeeds…
+		await expect(pwaPage.locator("#settings-status")).toContainText("saved", { timeout: 5_000 });
+		// …but Ollama is local-only, so no external-consent control is ever rendered.
+		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
+		await expect(pwaPage.locator(revokeConsentBtn)).toHaveCount(0);
+	});
+
+	test("granting consent swaps Review Consent for Revoke Consent after save", async ({
+		pwaPage,
+	}) => {
+		// Save an external provider so the Review Consent button is present.
+		await pwaPage.selectOption("#ai-provider", "groq");
+		await pwaPage.waitForTimeout(300);
+		await pwaPage.locator("button:has-text('Save Settings')").click();
+		await expect(pwaPage.locator(reviewConsentBtn)).toBeVisible({ timeout: 5_000 });
+
+		// Grant consent directly, then force a fresh render of Settings (navigate away and
+		// back so the router actually re-runs) — the control flips to Revoke.
+		await pwaPage.evaluate(() => window.AI.grantExternalConsent("groq", "manual"));
+		await pwaPage.evaluate(() => {
+			window.location.hash = "#/";
+		});
+		await pwaPage.waitForSelector("#screen");
+		await goSettings(pwaPage);
+
+		await expect(pwaPage.locator(revokeConsentBtn)).toBeVisible({ timeout: 5_000 });
+		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
 	});
 });

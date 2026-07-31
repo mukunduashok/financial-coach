@@ -1071,6 +1071,144 @@ describe("FINCO-60: external AI consent UX", () => {
 });
 
 // ===========================================================================
+// FINCO-78 — external-consent control appears immediately after saving AI settings
+// ===========================================================================
+describe("FINCO-78: consent control re-renders immediately after saving AI settings", () => {
+  async function renderSettings() {
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  beforeEach(() => {
+    window.Router.currentScreen = "#/settings";
+    // Start from a state with no provider configured — no consent control on first render.
+    AI.getSettings.mockReturnValue({});
+    AI.saveSettings.mockResolvedValue({
+      ok: true,
+      publicSaved: true,
+      secretSaved: true,
+      vaultRequired: false,
+    });
+    AI.requiresExternalConsent.mockReturnValue(false);
+    AI.hasExternalConsent.mockReturnValue(false);
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: false, email: null });
+    mockAPI.isVaultConfigured.mockReturnValue(true);
+    mockAPI.isVaultUnlocked.mockReturnValue(true);
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(false);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    window.Router.currentScreen = null;
+    vi.restoreAllMocks();
+  });
+
+  it("shows Review Consent immediately after saving an external provider without consent", async () => {
+    const screen = await renderSettings();
+    expect(screen.querySelector('[data-action="review-ai-consent"]')).toBeNull();
+
+    document.getElementById("ai-provider").value = "groq";
+    document.getElementById("ai-api-key").value = "sk-test";
+
+    // Simulate the newly-saved state the re-render will read back.
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+    AI.requiresExternalConsent.mockReturnValue(true);
+    AI.hasExternalConsent.mockReturnValue(false);
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(document.querySelector('[data-action="review-ai-consent"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="revoke-ai-consent"]')).toBeNull();
+  });
+
+  it("shows Revoke Consent immediately after saving when consent is already granted", async () => {
+    await renderSettings();
+
+    document.getElementById("ai-provider").value = "groq";
+
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+    AI.requiresExternalConsent.mockReturnValue(true);
+    AI.hasExternalConsent.mockReturnValue(true);
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(document.querySelector('[data-action="revoke-ai-consent"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="review-ai-consent"]')).toBeNull();
+  });
+
+  it("shows no consent control after saving a local Ollama provider", async () => {
+    await renderSettings();
+
+    document.getElementById("ai-provider").value = "ollama";
+
+    AI.getSettings.mockReturnValue({ provider: "ollama", model: "llama3.1:8b" });
+    AI.requiresExternalConsent.mockReturnValue(false);
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(document.querySelector('[data-action="review-ai-consent"]')).toBeNull();
+    expect(document.querySelector('[data-action="revoke-ai-consent"]')).toBeNull();
+  });
+
+  it("preserves the saved status text after the re-render", async () => {
+    await renderSettings();
+
+    document.getElementById("ai-provider").value = "groq";
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const status = document.getElementById("settings-status");
+    expect(status.textContent).toContain("✓ Settings saved");
+    expect(status.className).toContain("success");
+  });
+
+  it("re-renders the settings screen exactly once on a successful save", async () => {
+    await renderSettings();
+    document.getElementById("ai-provider").value = "groq";
+    AI.getSettings.mockReturnValue({ provider: "groq", model: "llama-3.3-70b-versatile" });
+
+    // renderSettings() reads AI.getSettings() exactly once per render.
+    AI.getSettings.mockClear();
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(AI.getSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-render the settings screen on the vault-required failure path", async () => {
+    AI.saveSettings.mockResolvedValueOnce({
+      ok: false,
+      publicSaved: true,
+      secretSaved: false,
+      vaultRequired: true,
+      error: "Set up a PIN before saving an AI API key.",
+    });
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+
+    await renderSettings();
+    document.getElementById("ai-provider").value = "groq";
+    document.getElementById("ai-api-key").value = "sk-test";
+
+    AI.getSettings.mockClear();
+
+    document.querySelector('[data-action="save-ai-settings"]').click();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(AI.getSettings).not.toHaveBeenCalled();
+    expect(document.getElementById("settings-status").textContent).toContain(
+      "Set up a PIN before saving an AI API key.",
+    );
+  });
+});
+
+// ===========================================================================
 // BUG-GDRIVE-01 — delete backup UI and double-confirmation flow
 // ===========================================================================
 describe("BUG-GDRIVE-01: Google Drive delete backup with double confirmation", () => {
