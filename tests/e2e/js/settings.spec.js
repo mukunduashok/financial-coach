@@ -1282,3 +1282,109 @@ test.describe("TestFINCO78ConsentControlAfterSave", () => {
 		await expect(pwaPage.locator(reviewConsentBtn)).toHaveCount(0);
 	});
 });
+
+// ===========================================================================
+// AI provider field visibility (Issue 5) — mobile viewport.
+// onProviderChange now toggles the `.hidden` class instead of inline styles.
+// Selecting Gemini hides azure + ollama fields; Azure shows azure fields;
+// Ollama shows the ollama base-url field.
+// ===========================================================================
+test.describe("TestAIProviderFieldVisibility", () => {
+  const MOBILE = { width: 375, height: 812 };
+
+  test.beforeEach(async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    await goSettings(pwaPage);
+  });
+
+  test("Google Gemini hides azure and ollama fields", async ({ pwaPage }) => {
+    await pwaPage.selectOption("#ai-provider", "gemini");
+    await pwaPage.waitForTimeout(200);
+
+    const azure = pwaPage.locator("#azure-fields");
+    const ollama = pwaPage.locator("#ollama-base-url-field");
+    await expect(azure).toHaveClass(/hidden/);
+    await expect(ollama).toHaveClass(/hidden/);
+    await expect(azure).toBeHidden();
+    await expect(ollama).toBeHidden();
+  });
+
+  test("Azure OpenAI shows the azure fields", async ({ pwaPage }) => {
+    await pwaPage.selectOption("#ai-provider", "azure");
+    await pwaPage.waitForTimeout(200);
+
+    const azure = pwaPage.locator("#azure-fields");
+    await expect(azure).not.toHaveClass(/hidden/);
+    await expect(azure).toBeVisible();
+    await expect(pwaPage.locator("#azure-resource-name")).toBeVisible();
+    await expect(pwaPage.locator("#azure-deployment-name")).toBeVisible();
+    await expect(pwaPage.locator("#azure-api-version")).toBeVisible();
+    // Ollama field stays hidden for Azure.
+    await expect(pwaPage.locator("#ollama-base-url-field")).toBeHidden();
+  });
+
+  test("Ollama shows the base URL field and hides azure fields", async ({ pwaPage }) => {
+    await pwaPage.selectOption("#ai-provider", "ollama");
+    await pwaPage.waitForTimeout(200);
+
+    const ollama = pwaPage.locator("#ollama-base-url-field");
+    await expect(ollama).not.toHaveClass(/hidden/);
+    await expect(ollama).toBeVisible();
+    await expect(pwaPage.locator("#ollama-base-url")).toBeVisible();
+    await expect(pwaPage.locator("#azure-fields")).toBeHidden();
+  });
+});
+
+// ===========================================================================
+// Credential Vault button group (Issue 6) — mobile viewport.
+// The Reset / Change PIN / Lock Now buttons live in `.btn-group` which now
+// wraps (flex-wrap) instead of relying on inline styles. Verify the buttons
+// render and do not overlap when wrapped on a narrow viewport.
+// ===========================================================================
+test.describe("TestVaultButtonGroupMobileLayout", () => {
+  const MOBILE = { width: 375, height: 812 };
+
+  test("vault action buttons do not overlap on mobile", async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    // Configure the vault so the Credential Vault card renders its btn-group.
+    await pwaPage.evaluate(async () => {
+      await window.API.setupVault("123456");
+    });
+    await pwaPage.evaluate(() => {
+      window.location.hash = "#/";
+    });
+    await pwaPage.waitForSelector("#screen");
+    await goSettings(pwaPage);
+
+    const group = pwaPage.locator(".btn-group").filter({
+      has: pwaPage.locator('[data-action="vault-change-passphrase"]'),
+    });
+    await expect(group).toBeVisible();
+
+    const changePin = group.locator('[data-action="vault-change-passphrase"]');
+    const lockNow = group.locator('[data-action="vault-lock"]');
+    const reset = group.locator('[data-action="vault-reset"]');
+    await expect(changePin).toBeVisible();
+    await expect(lockNow).toBeVisible();
+    await expect(reset).toBeVisible();
+
+    const boxes = [
+      await changePin.boundingBox(),
+      await lockNow.boundingBox(),
+      await reset.boundingBox(),
+    ];
+    for (const b of boxes) expect(b).not.toBeNull();
+
+    // No pair of buttons may overlap (neither horizontally nor vertically).
+    const overlaps = (a, b) =>
+      a.x < b.x + b.width &&
+      a.x + a.width > b.x &&
+      a.y < b.y + b.height &&
+      a.y + a.height > b.y;
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        expect(overlaps(boxes[i], boxes[j])).toBe(false);
+      }
+    }
+  });
+});

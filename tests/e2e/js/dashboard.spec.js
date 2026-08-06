@@ -133,3 +133,51 @@ test.describe("TestBackupNudge", () => {
     expect(await page.locator(NUDGE_TOAST).count()).toBe(0);
   });
 });
+
+// ===========================================================================
+// Mobile-view CSP-migration regressions (Issues 1 & 2)
+// The CSP was tightened to `style-src 'self'`, so inline styles were migrated
+// to CSS classes. These tests run at a mobile viewport and assert the visual
+// contract that the inline styles previously provided.
+// ===========================================================================
+test.describe("TestDashboardMobileLayout", () => {
+  const MOBILE = { width: 375, height: 812 };
+
+  async function goDashboard(page) {
+    await page.evaluate(() => {
+      window.location.hash = "#/";
+    });
+    await page.waitForSelector("#screen .balance-card", { timeout: 10_000 });
+  }
+
+  // Issue 1 — Total Balance card must be centre-aligned via .balance-card class.
+  test("balance card is centre-aligned on mobile", async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    await seedDashboardData(pwaPage);
+    await goDashboard(pwaPage);
+
+    const card = pwaPage.locator(".balance-card");
+    await expect(card).toBeVisible();
+    const textAlign = await card.evaluate((el) => getComputedStyle(el).textAlign);
+    expect(textAlign).toBe("center");
+  });
+
+  // Issue 2 — Upcoming Bills card must sit below the stats-row without overlap.
+  test("upcoming bills card does not overlap the stats-row on mobile", async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    await seedDashboardData(pwaPage);
+    await goDashboard(pwaPage);
+
+    const statsRow = pwaPage.locator(".stats-row");
+    const billsCard = pwaPage.locator('.card:has(.card-title:has-text("Upcoming Bills"))');
+    await expect(statsRow).toBeVisible();
+    await expect(billsCard).toBeVisible();
+
+    const statsBox = await statsRow.boundingBox();
+    const billsBox = await billsCard.boundingBox();
+    expect(statsBox).not.toBeNull();
+    expect(billsBox).not.toBeNull();
+    // Bills card top must be at or below the bottom of the stats-row.
+    expect(billsBox.y).toBeGreaterThanOrEqual(statsBox.y + statsBox.height - 1);
+  });
+});

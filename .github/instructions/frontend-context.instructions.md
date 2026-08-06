@@ -167,6 +167,20 @@ const html = window.marked(mdText);
 const sanitized = window.DOMPurify.sanitize(userInput);
 ```
 
+### 7. No Inline Styles (CSP `style-src 'self'`)
+
+The CSP is tightened to `style-src 'self'` (no `'unsafe-inline'`), so the browser
+**silently ignores any inline `style="..."` attribute**. Never emit inline styles
+from `app.js` render functions.
+
+- Toggle visibility with the `.hidden` class (`display: none !important`) via
+  `classList.toggle("hidden", condition)` — not `el.style.display`.
+- Use the utility/semantic classes in `styles.css` (`.balance-card`, `.btn-group`,
+  `.btn-reimport`, `.stats-row`, `.mt-*`, `.mb-*`, `.text-success`, etc.) instead
+  of inline styles.
+- Regression guard: `tests/js/app.test.js` asserts `static/js/app.js` contains
+  zero `style="` occurrences.
+
 ## Module Responsibilities
 
 | Module | Responsibility | When to modify |

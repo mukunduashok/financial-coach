@@ -224,3 +224,48 @@ test.describe("TestSyncNoAIConfigured", () => {
 		expect(errors).toHaveLength(0);
 	});
 });
+
+// ===========================================================================
+// Mobile layout — full-width sync buttons must stack without overlapping
+// (Issue 4). "Sync Now" (#btn-sync) and "Re-import deleted transactions"
+// (#btn-reset-sync-history / .btn-reimport) are both .btn-full.
+// ===========================================================================
+test.describe("TestSyncButtonsMobileLayout", () => {
+	const MOBILE = { width: 375, height: 812 };
+
+	test("sync buttons stack without vertical overlap on mobile", async ({ page }) => {
+		await page.setViewportSize(MOBILE);
+		await buildSyncPage(page);
+		// Gmail credentials are vault-backed — set up a PIN and save tokens via
+		// the API so Gmail.isConnected() is true and the sync controls render.
+		await page.evaluate(async () => {
+			await window.API.setupVault("123456");
+			await window.Gmail.saveSettings({
+				email: "test@example.com",
+				accessToken: "fake-access-token",
+				refreshToken: "fake-refresh-token",
+				tokenExpiry: Date.now() + 3_600_000,
+			});
+		});
+		await page.evaluate(() => {
+			window.location.hash = "#/sync";
+		});
+		await page.waitForSelector("#btn-sync", { timeout: 10_000 });
+
+		const syncBtn = page.locator("#btn-sync");
+		const reimportBtn = page.locator("#btn-reset-sync-history");
+		await expect(syncBtn).toBeVisible();
+		await expect(reimportBtn).toBeVisible();
+
+		// Confirm the re-import button carries the migrated CSS class.
+		await expect(reimportBtn).toHaveClass(/btn-reimport/);
+
+		const syncBox = await syncBtn.boundingBox();
+		const reimportBox = await reimportBtn.boundingBox();
+		expect(syncBox).not.toBeNull();
+		expect(reimportBox).not.toBeNull();
+
+		// Sync button sits above the re-import button; bottoms must not overlap.
+		expect(syncBox.y + syncBox.height).toBeLessThanOrEqual(reimportBox.y + 1);
+	});
+});

@@ -107,11 +107,11 @@ vi.mock("../../static/js/ai.js", () => ({
     testConnection: vi.fn().mockResolvedValue({ ok: true }),
   },
   AI_PROVIDERS: {
-    groq: { name: "Groq", requiresKey: true, defaultModel: "llama-3.3-70b-versatile" },
-    openai: { name: "OpenAI", requiresKey: true, defaultModel: "gpt-4o-mini" },
-    ollama: { name: "Ollama (Local)", requiresKey: false, defaultModel: "llama3.1:8b" },
-    gemini: { name: "Google Gemini", requiresKey: true, defaultModel: "gemini-2.0-flash" },
-    azure: { name: "Azure OpenAI", requiresKey: true, defaultModel: "" },
+    groq: { name: "Groq", requiresKey: true, defaultModel: "llama-3.3-70b-versatile", models: ["llama-3.3-70b-versatile"] },
+    openai: { name: "OpenAI", requiresKey: true, defaultModel: "gpt-4o-mini", models: ["gpt-4o-mini"] },
+    ollama: { name: "Ollama (Local)", requiresKey: false, defaultModel: "llama3.1:8b", models: ["llama3.1:8b"] },
+    gemini: { name: "Google Gemini", requiresKey: true, defaultModel: "gemini-2.0-flash", models: ["gemini-2.0-flash"] },
+    azure: { name: "Azure OpenAI", requiresKey: true, defaultModel: "", models: [] },
   },
 }));
 
@@ -1983,14 +1983,79 @@ describe("BUG-PROD-01: GDrive backup API key checkbox visibility", () => {
     const screen = await renderSettingsWithProvider("ollama");
     const field = screen.querySelector("#gdrive-backup-api-key-field");
     expect(field).not.toBeNull();
-    expect(field.style.display).toBe("none");
+    expect(field.classList.contains("hidden")).toBe(true);
   });
 
   it("backup key checkbox is visible when provider has requiresKey: true (Groq)", async () => {
     const screen = await renderSettingsWithProvider("groq");
     const field = screen.querySelector("#gdrive-backup-api-key-field");
     expect(field).not.toBeNull();
-    expect(field.style.display).toBe("block");
+    expect(field.classList.contains("hidden")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// CSP-safe inline-style migration — Settings & Vault (Issues 5 & 6)
+// ===========================================================================
+describe("Settings inline-style migration to CSS classes", () => {
+  async function renderSettingsWithProvider(providerKey) {
+    AI.getSettings.mockReturnValue(
+      providerKey ? { provider: providerKey, apiKey: "sk-test", model: "m" } : {},
+    );
+    mockAPI.getGmailStatus.mockResolvedValue({ connected: true, email: "user@example.com" });
+    mockAPI.isVaultConfigured.mockReturnValue(true);
+    localStorage.setItem("fincoach-vault-salt", "configured");
+    vi.spyOn(GDrive, "isEnabled").mockReturnValue(true);
+    vi.spyOn(GDrive, "getLastSyncTime").mockReturnValue(null);
+    vi.spyOn(GDrive, "getLastModified").mockResolvedValue(null);
+    const renderFn = window.Router.routes["#/settings"];
+    await renderFn();
+    return document.getElementById("screen");
+  }
+
+  afterEach(() => {
+    mockAPI.isVaultConfigured.mockReturnValue(false);
+    localStorage.removeItem("fincoach-vault-salt");
+    vi.restoreAllMocks();
+  });
+
+  it("renderSettings output contains no inline style= attribute", async () => {
+    const screen = await renderSettingsWithProvider("groq");
+    expect(screen.innerHTML).not.toContain('style="');
+  });
+
+  it("vault button group renders with class btn-group and no inline style", async () => {
+    const screen = await renderSettingsWithProvider("groq");
+    const changePinBtn = screen.querySelector('[data-action="vault-change-passphrase"]');
+    expect(changePinBtn).not.toBeNull();
+    const group = changePinBtn.parentElement;
+    expect(group.classList.contains("btn-group")).toBe(true);
+    expect(group.getAttribute("style")).toBeNull();
+  });
+
+  it("onProviderChange hides azure + ollama fields when provider is gemini (Issue 5)", async () => {
+    const screen = await renderSettingsWithProvider("gemini");
+    const sel = screen.querySelector("#ai-provider");
+    sel.value = "gemini";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(screen.querySelector("#azure-fields").classList.contains("hidden")).toBe(true);
+    expect(screen.querySelector("#ollama-base-url-field").classList.contains("hidden")).toBe(true);
+  });
+
+  it("onProviderChange shows azure fields when provider is azure", async () => {
+    const screen = await renderSettingsWithProvider("gemini");
+    const sel = screen.querySelector("#ai-provider");
+    sel.value = "azure";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(screen.querySelector("#azure-fields").classList.contains("hidden")).toBe(false);
+  });
+
+  it("onProviderChange shows ollama base URL field when provider is ollama", async () => {
+    const screen = await renderSettingsWithProvider("gemini");
+    const sel = screen.querySelector("#ai-provider");
+    sel.value = "ollama";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(screen.querySelector("#ollama-base-url-field").classList.contains("hidden")).toBe(false);
   });
 });
 
@@ -3092,7 +3157,7 @@ describe("Vault — PIN minimum 4 characters", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     const errEl = modal.querySelector("#vault-setup-error");
-    expect(errEl.style.display).not.toBe("none");
+    expect(errEl.classList.contains("hidden")).toBe(false);
     expect(errEl.textContent).toContain("only digits and be at least 6 digits");
     expect(mockAPI.setupVault).not.toHaveBeenCalled();
   });
@@ -3110,7 +3175,7 @@ describe("Vault — PIN minimum 4 characters", () => {
 		await new Promise((r) => setTimeout(r, 0));
 
 		const errEl = modal.querySelector("#vault-setup-error");
-		expect(errEl.style.display).not.toBe("none");
+		expect(errEl.classList.contains("hidden")).toBe(false);
 		expect(errEl.textContent).toContain("only digits and be at least 6 digits");
 		expect(mockAPI.setupVault).not.toHaveBeenCalled();
 	});
@@ -3566,4 +3631,22 @@ describe("FINCO-33: backup reminder nudge", () => {
 		btns[1].click();
 		expect(navSpy).toHaveBeenCalledWith("#/settings");
 	});
+});
+
+// ===========================================================================
+// CSP regression guard — no inline style= attributes in app.js source
+//
+// The CSP was tightened to `style-src 'self'` (no 'unsafe-inline'), so any
+// inline style="..." attribute is silently ignored by the browser. This guard
+// fails the build if an inline style is reintroduced into app.js.
+// ===========================================================================
+describe("CSP guard: app.js source has zero inline style= attributes", () => {
+  it("static/js/app.js contains no style=\" occurrences", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const srcPath = join(process.cwd(), "static/js/app.js");
+    const source = readFileSync(srcPath, "utf8");
+    const matches = source.match(/style="/g) || [];
+    expect(matches.length).toBe(0);
+  });
 });

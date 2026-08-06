@@ -1918,3 +1918,68 @@ test.describe("TestMergedAccountsFilter", () => {
 	});
 });
 
+
+// ===========================================================================
+// Edit modal follow-up / reminder toggles (Issue 3) — mobile viewport.
+// The follow-up section and recurrence group now use the `.hidden` class
+// (CSP-safe) instead of inline styles. Verify they toggle with their
+// respective checkboxes.
+// ===========================================================================
+test.describe("TestEditModalFollowupToggles", () => {
+  const MOBILE = { width: 375, height: 812 };
+
+  async function openEditModal(page) {
+    await seedTransactionData(page);
+    await page.evaluate(() => {
+      window.location.hash = "#/transactions";
+    });
+    await page.waitForSelector("#screen");
+    // Open the edit modal for the first transaction in the list.
+    await page.locator('[data-action="show-edit-tx"]').first().click();
+    await page.waitForSelector("#edit-followup-enabled", { timeout: 10_000 });
+  }
+
+  test("follow-up form hidden until checkbox is checked, then toggles", async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    await openEditModal(pwaPage);
+
+    const flag = pwaPage.locator("#edit-followup-enabled");
+    const form = pwaPage.locator("#edit-followup-form");
+
+    // Unchecked by default → form hidden.
+    await expect(flag).not.toBeChecked();
+    await expect(form).toBeHidden();
+
+    // Check → form becomes visible.
+    await flag.check();
+    await expect(form).toBeVisible();
+
+    // Uncheck → form hides again.
+    await flag.uncheck();
+    await expect(form).toBeHidden();
+  });
+
+  test("recurrence group toggles with the Repeats checkbox", async ({ pwaPage }) => {
+    await pwaPage.setViewportSize(MOBILE);
+    await openEditModal(pwaPage);
+
+    // Reveal the follow-up form first so the Repeats checkbox is interactable.
+    await pwaPage.locator("#edit-followup-enabled").check();
+    await expect(pwaPage.locator("#edit-followup-form")).toBeVisible();
+
+    const repeats = pwaPage.locator("#edit-followup-recurring");
+    const group = pwaPage.locator("#edit-followup-recurrence-group");
+
+    // Unchecked by default → recurrence group hidden.
+    await expect(repeats).not.toBeChecked();
+    await expect(group).toBeHidden();
+
+    // Check Repeats → group visible.
+    await repeats.check();
+    await expect(group).toBeVisible();
+
+    // Uncheck → group hidden again.
+    await repeats.uncheck();
+    await expect(group).toBeHidden();
+  });
+});

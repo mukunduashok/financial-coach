@@ -701,12 +701,13 @@ document.addEventListener("change", (e) => {
     case "toggle-followup-form": {
       const form = document.getElementById("edit-followup-form");
       if (form)
-        form.style.display = /** @type {HTMLInputElement} */ (e.target).checked ? "" : "none";
+        form.classList.toggle("hidden", !(/** @type {HTMLInputElement} */ (e.target).checked));
       break;
     }
     case "toggle-followup-recurrence-select": {
       const grp = document.getElementById("edit-followup-recurrence-group");
-      if (grp) grp.style.display = /** @type {HTMLInputElement} */ (e.target).checked ? "" : "none";
+      if (grp)
+        grp.classList.toggle("hidden", !(/** @type {HTMLInputElement} */ (e.target).checked));
       break;
     }
     case "toggle-excluded-from-expenses":
@@ -1061,12 +1062,12 @@ const Router = {
       }
       for (const id of chatBtnIds) {
         const el = document.getElementById(id);
-        if (el) el.style.display = "";
+        if (el) el.classList.remove("hidden");
       }
     } else {
       for (const id of chatBtnIds) {
         const el = document.getElementById(id);
-        if (el) el.style.display = "none";
+        if (el) el.classList.add("hidden");
       }
     }
     // Reset screen-content styles when leaving chat
@@ -1206,7 +1207,7 @@ async function renderDashboard() {
     const recent = transactions.slice(0, 10);
 
     screen.innerHTML = `
-      <div class="card" style="text-align:center">
+      <div class="card balance-card">
         <div class="balance-label">Total Balance</div>
         <div class="balance-amount">${privacyAmount(formatCurrency(totalBalance))}</div>
         <div class="balance-label">${accounts.length} account${accounts.length !== 1 ? "s" : ""}</div>
@@ -1223,7 +1224,7 @@ async function renderDashboard() {
         </div>
       </div>
 
-      <div class="card" style="margin-top:var(--space-md)">
+      <div class="card">
         <div class="card-title">Upcoming Bills</div>
         ${
           upcomingBills.length === 0
@@ -1232,7 +1233,7 @@ async function renderDashboard() {
         }
       </div>
 
-      <div class="card" style="margin-top:var(--space-md)">
+      <div class="card">
         <div class="card-title">Recent Transactions</div>
         ${
           recent.length === 0
@@ -1323,8 +1324,8 @@ function followUpRowHTML(f) {
         </span>
       </div>
       <div class="bill-mgmt-controls">
-        <div class="form-group" style="margin:0">
-          <label style="font-size:0.75rem">Due date</label>
+        <div class="form-group m-0">
+          <label class="fs-xs">Due date</label>
           <input type="date" class="form-control form-control-sm" value="${f.due_date || ""}"
             data-change="followup-due-date" data-id="${f.id}" ${isDone ? "disabled" : ""}>
         </div>
@@ -1338,8 +1339,8 @@ function followUpRowHTML(f) {
         </div>
         ${
           f.is_recurring
-            ? `<div class="form-group" style="margin:0">
-          <label style="font-size:0.75rem">Every</label>
+            ? `<div class="form-group m-0">
+          <label class="fs-xs">Every</label>
           <select class="form-control form-control-sm" data-change="followup-recurrence"
             data-id="${f.id}">${recurrenceOptions}</select>
         </div>`
@@ -1714,7 +1715,7 @@ async function loadTransactionList(reset = true) {
     if (!txHasMore && txOffset > 0) {
       container.insertAdjacentHTML(
         "beforeend",
-        `<div class="tx-end-msg empty-state" style="padding:var(--space-md)"><div class="empty-text">All ${txOffset} transactions loaded</div></div>`,
+        `<div class="tx-end-msg empty-state p-md"><div class="empty-text">All ${txOffset} transactions loaded</div></div>`,
       );
     }
   } catch (err) {
@@ -2041,7 +2042,7 @@ function followUpFormHTML(followUp) {
         <span>Flag for follow-up / reminder</span>
       </label>
     </div>
-    <div id="edit-followup-form" style="display:${enabled ? "" : "none"}">
+    <div id="edit-followup-form" class="${enabled ? "" : "hidden"}">
       <div class="form-group">
         <label>Follow-up type</label>
         <select class="form-control" id="edit-followup-type">${typeOptions}</select>
@@ -2061,7 +2062,7 @@ function followUpFormHTML(followUp) {
           <span>Repeats</span>
         </label>
       </div>
-      <div class="form-group" id="edit-followup-recurrence-group" style="display:${followUp?.is_recurring ? "" : "none"}">
+      <div class="form-group ${followUp?.is_recurring ? "" : "hidden"}" id="edit-followup-recurrence-group">
         <label>Every</label>
         <select class="form-control" id="edit-followup-recurrence">${recurrenceOptions}</select>
       </div>
@@ -2354,12 +2355,12 @@ function showMerchantLearnPrompt(merchantLabel, categoryId) {
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
       <div class="modal confirm-dialog">
-        <p style="margin-bottom:var(--space-sm);font-weight:600">Map merchant to category?</p>
-        <p style="font-size:0.9rem;color:var(--color-text-secondary)">
+        <p class="mb-sm fw-600">Map merchant to category?</p>
+        <p class="field-hint">
           Do you want to automatically categorize all transactions from
           <strong>${escapeHtml(merchantLabel)}</strong> as <strong>${escapeHtml(catName)}</strong>?
         </p>
-        <p style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:var(--space-sm)">
+        <p class="field-hint-sm">
           This will update all past and future transactions from this merchant.
         </p>
         <div class="modal-actions">
@@ -2390,8 +2391,8 @@ function showMerchantRenamePrompt(merchantLabel, newName) {
     overlay.className = "modal-overlay";
     overlay.innerHTML = `
       <div class="modal confirm-dialog">
-        <p style="margin-bottom:var(--space-sm);font-weight:600">Remember this merchant name?</p>
-        <p style="font-size:0.9rem;color:var(--color-text-secondary)">
+        <p class="mb-sm fw-600">Remember this merchant name?</p>
+        <p class="field-hint">
           Apply the name <strong>${escapeHtml(newName)}</strong> to all past &amp; future
           transactions from <strong>${escapeHtml(merchantLabel)}</strong>?
         </p>
@@ -2520,7 +2521,7 @@ async function renderAddTransaction() {
           <label>Tags</label>
           <div id="new-tx-tag-chips" class="tag-chips-container"></div>
           <input type="text" class="form-control" id="new-tx-tag-input" placeholder="Type a tag and press Enter">
-          <small style="color:var(--color-text-secondary)">Spaces auto-convert to camelCase. Press Enter or comma to add.</small>
+          <small class="text-muted">Spaces auto-convert to camelCase. Press Enter or comma to add.</small>
         </div>
 
         <button class="btn btn-primary btn-full" id="btn-create-tx" data-action="create-transaction">Create Transaction</button>
@@ -2677,7 +2678,7 @@ async function renderSync() {
     screen.innerHTML = `
       <div class="card">
         <div class="card-title">Gmail Connection</div>
-        <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-md)">
+        <div class="gmail-status-row">
           <span class="status-dot ${connected ? "connected" : "disconnected"}"></span>
           <span>${connected ? "Connected" : "Not Connected"}</span>
         </div>
@@ -2703,11 +2704,11 @@ async function renderSync() {
           ${syncFieldsHTML()}
         </div>
 
-        <button class="btn btn-primary btn-full" id="btn-sync" data-action="run-sync" style="margin-top:var(--space-md)">Sync Now</button>
-        <button class="btn btn-secondary btn-full" id="btn-reset-sync-history" data-action="reset-sync-history" style="margin-top:var(--space-sm);font-size:0.85em">Re-import deleted transactions</button>
+        <button class="btn btn-primary btn-full mt-md" id="btn-sync" data-action="run-sync">Sync Now</button>
+        <button class="btn btn-secondary btn-full btn-reimport" id="btn-reset-sync-history" data-action="reset-sync-history">Re-import deleted transactions</button>
         ${
           needsAiConsent
-            ? `<p class="text-muted" style="margin-top:var(--space-sm);font-size:0.9em">External AI consent is required before Gmail extraction sends masked email content to ${escapeHtml(AI_PROVIDERS[aiProvider]?.name || aiProvider)}. Until then, Financial Coach will stay in local heuristic mode.</p>`
+            ? `<p class="text-muted mt-sm fs-md-em">External AI consent is required before Gmail extraction sends masked email content to ${escapeHtml(AI_PROVIDERS[aiProvider]?.name || aiProvider)}. Until then, Financial Coach will stay in local heuristic mode.</p>`
             : ""
         }
       </div>
@@ -2831,7 +2832,7 @@ async function runSync() {
   const resultsDiv = document.getElementById("sync-results");
 
   btn.disabled = true;
-  resultsDiv.innerHTML = `<div class="card"><div class="spinner"></div><p style="text-align:center;color:var(--color-text-secondary);margin-top:var(--space-sm)">Syncing emails… this may take a moment</p></div>`;
+  resultsDiv.innerHTML = `<div class="card"><div class="spinner"></div><p class="text-center text-muted mt-sm">Syncing emails… this may take a moment</p></div>`;
 
   const params = { auto_import: true, batch_size: 20 };
   if (syncMode === "days") {
@@ -2841,7 +2842,7 @@ async function runSync() {
     const endVal = document.getElementById("sync-end").value;
     if (startVal && endVal && startVal > endVal) {
       btn.disabled = false;
-      resultsDiv.innerHTML = `<div class="card"><p style="color:var(--color-expense);padding:var(--space-sm)">⚠ Start date cannot be later than end date.</p></div>`;
+      resultsDiv.innerHTML = `<div class="card"><p class="text-danger p-sm">⚠ Start date cannot be later than end date.</p></div>`;
       return;
     }
     params.start_date = startVal;
@@ -2889,14 +2890,13 @@ async function runSync() {
         `
             : ""
         }
-        <button class="btn btn-outline btn-full" style="margin-top:var(--space-md)" data-action="nav-navigate" data-route="#/transactions">View Transactions</button>
+        <button class="btn btn-outline btn-full mt-md" data-action="nav-navigate" data-route="#/transactions">View Transactions</button>
       </div>
     `;
 
     if (result.heuristic_mode) {
       const notice = document.createElement("p");
-      notice.className = "text-muted";
-      notice.style.marginTop = "var(--space-sm)";
+      notice.className = "text-muted mt-sm";
       notice.textContent =
         "Regex-based extraction was used (no AI key). Some transactions may be incomplete. Add an AI key in Settings for full accuracy.";
       const syncResults = resultsDiv.querySelector(".sync-results") || resultsDiv;
@@ -2906,9 +2906,9 @@ async function runSync() {
     Toast.success(`Imported ${imported} transaction${imported !== 1 ? "s" : ""}`);
   } catch (err) {
     if (err.status === 401) {
-      resultsDiv.innerHTML = `<div class="card"><p>Session expired. Please reconnect Gmail.</p><button class="btn btn-primary btn-sm" data-action="connect-gmail" style="margin-top:var(--space-sm)">Reconnect</button></div>`;
+      resultsDiv.innerHTML = `<div class="card"><p>Session expired. Please reconnect Gmail.</p><button class="btn btn-primary btn-sm mt-sm" data-action="connect-gmail">Reconnect</button></div>`;
     } else {
-      resultsDiv.innerHTML = `<div class="card"><p style="color:var(--color-expense)">${escapeHtml(err.message)}</p><button class="btn btn-outline btn-sm" data-action="run-sync" style="margin-top:var(--space-sm)">Retry</button></div>`;
+      resultsDiv.innerHTML = `<div class="card"><p class="text-danger">${escapeHtml(err.message)}</p><button class="btn btn-outline btn-sm mt-sm" data-action="run-sync">Retry</button></div>`;
     }
   } finally {
     btn.disabled = false;
@@ -2964,12 +2964,15 @@ async function renderAccounts() {
       .join("");
 
     screen.innerHTML = `
-      <div style="display:flex;gap:var(--space-sm);margin-bottom:var(--space-md)">
+      <div class="toolbar-row">
         <button class="btn btn-outline btn-sm" data-action="show-merge-account">Merge Accounts</button>
       </div>
       ${sectionsHTML}
       <button class="fab" data-action="show-create-account" title="Add Account">+</button>
     `;
+    for (const el of screen.querySelectorAll(".account-child[data-indent]")) {
+      el.style.paddingLeft = `${el.dataset.indent}px`;
+    }
   } catch (err) {
     screen.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">${escapeHtml(err.message)}</div></div>`;
   }
@@ -3041,7 +3044,7 @@ function renderBankTile(a, accountMap) {
 
 function renderCreditCardTile(a, accountMap) {
   const last4 = a.account_identifier ? a.account_identifier.slice(-4) : "";
-  const balanceHTML = `${formatCurrency(a.credit_cycle_balance ?? 0)} <span style="font-size:0.75em;opacity:0.7">due this cycle</span>`;
+  const balanceHTML = `${formatCurrency(a.credit_cycle_balance ?? 0)} <span class="due-cycle-note">due this cycle</span>`;
   return `
     <div class="card acct-tile acct-tile--credit">
       <div class="acct-tile__body" data-action="toggle-account-children" data-id="${a.id}">
@@ -3122,7 +3125,7 @@ function renderAccountChildren(children, accountMap, depth) {
       const grandchildren = full.merged_accounts || [];
       const indent = depth * 16;
       return `
-      <div class="account-child" style="padding-left:${indent}px">
+      <div class="account-child" data-indent="${indent}">
         <span>${"─".repeat(depth)} ${escapeHtml(c.name)} <span class="badge badge-type">${escapeHtml(c.account_type)}</span>
           ${grandchildren.length ? `<span class="account-sub-count">${grandchildren.length} merged</span>` : ""}
         </span>
@@ -3312,7 +3315,7 @@ async function showMergeAccountModal() {
         <span class="modal-title">Merge Accounts</span>
         <button class="modal-close" data-action="close-modal">&times;</button>
       </div>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary);margin-bottom:var(--space-md)">
+      <p class="dialog-hint mb-md">
         Merge source into target. Both must be the same type. Source becomes a child of target. Multi-level hierarchies are supported.
       </p>
       <div class="form-group">
@@ -3395,7 +3398,7 @@ function confirmUnmergeAccount(id, name) {
   overlay.innerHTML = `
     <div class="modal confirm-dialog">
       <p>Unmerge "${escapeHtml(name)}"?</p>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary)">This account will become standalone again.</p>
+      <p class="dialog-hint">This account will become standalone again.</p>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
         <button class="btn btn-primary" data-action="do-unmerge-account" data-id="${id}">Unmerge</button>
@@ -3513,7 +3516,7 @@ function showAIConsentModal(source = "settings", onAccept = null) {
         masked transaction descriptions, account summaries, budgets, goals, and relevant Gmail-derived
         content from this device directly to ${escapeHtml(providerName)} for ${escapeHtml(sourceLabel)}.
       </p>
-      <p class="text-muted" style="font-size:0.9em">
+      <p class="text-muted fs-md-em">
         Detected identifiers like phone numbers, emails, PAN, Aadhaar, UPI handles, and labelled account
         references are masked before sending when possible. Do not paste secrets or personal details that
         you do not want shared. You can revoke this consent later in Settings.
@@ -4053,7 +4056,7 @@ async function confirmDeleteCategory(id, name) {
 
   const warningText =
     txCount > 0
-      ? `<p style="font-size:0.85rem;color:var(--color-text-secondary)">${txCount} transaction(s) use this category. They will become uncategorized.</p>`
+      ? `<p class="dialog-hint">${txCount} transaction(s) use this category. They will become uncategorized.</p>`
       : "";
 
   overlay.innerHTML = `
@@ -4309,7 +4312,7 @@ function confirmDeleteMerchant(id, name) {
   overlay.innerHTML = `
     <div class="modal confirm-dialog">
       <p>Delete merchant "${escapeHtml(name)}"?</p>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary)">Transactions linked to this merchant will be unlinked.</p>
+      <p class="dialog-hint">Transactions linked to this merchant will be unlinked.</p>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
         <button class="btn btn-danger" data-action="do-delete-merchant" data-id="${id}">Delete</button>
@@ -4381,7 +4384,7 @@ function showAddTagModal() {
       <div class="form-group">
         <label>Name*</label>
         <input type="text" class="form-control" id="tag-name" placeholder="e.g. online or trip to yercaud">
-        <small style="color:var(--color-text-secondary)">Spaces auto-convert to camelCase. No leading #.</small>
+        <small class="text-muted">Spaces auto-convert to camelCase. No leading #.</small>
       </div>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
@@ -4464,7 +4467,7 @@ async function confirmDeleteTag(id, name) {
   overlay.innerHTML = `
     <div class="modal confirm-dialog">
       <p>Delete tag <strong>#${escapeHtml(name)}</strong>?</p>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary)">This will remove the tag from all transactions.</p>
+      <p class="dialog-hint">This will remove the tag from all transactions.</p>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
         <button class="btn btn-danger" data-action="do-delete-tag" data-id="${id}">Delete</button>
@@ -4786,6 +4789,9 @@ async function renderGoals() {
 
     // Render doughnut charts after DOM is ready
     for (const g of goals) renderGoalChart(g);
+    for (const el of screen.querySelectorAll(".goal-progress-fill[data-pct]")) {
+      el.style.width = `${el.dataset.pct}%`;
+    }
   } catch (err) {
     screen.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">${escapeHtml(err.message)}</div></div>`;
   }
@@ -4832,7 +4838,7 @@ function goalCardHTML(g) {
         </div>
       </div>
       <div class="goal-progress-bar">
-        <div class="goal-progress-fill ${barColorClass}" style="width:${pct.toFixed(1)}%"></div>
+        <div class="goal-progress-fill ${barColorClass}" data-pct="${pct.toFixed(1)}"></div>
       </div>
       <div class="goal-stats">
         <div class="goal-stat">
@@ -5108,7 +5114,7 @@ function confirmDeleteGoal(goalId, goalName) {
   overlay.innerHTML = `
     <div class="modal confirm-dialog">
       <p>Delete goal "${escapeHtml(goalName)}"?</p>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary)">This action cannot be undone.</p>
+      <p class="dialog-hint">This action cannot be undone.</p>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
         <button class="btn btn-danger" data-action="do-delete-goal" data-id="${goalId}">Delete</button>
@@ -5179,6 +5185,9 @@ async function renderBudgets() {
       </div>
       <button class="fab" data-action="show-create-budget" title="Add Budget">+</button>
     `;
+    for (const el of screen.querySelectorAll(".budget-progress-fill[data-pct]")) {
+      el.style.width = `${el.dataset.pct}%`;
+    }
   } catch (err) {
     screen.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">${escapeHtml(err.message)}</div></div>`;
   }
@@ -5196,7 +5205,7 @@ function budgetCardHTML(b) {
       </div>
       <div class="budget-card-period">${b.period_start} → ${b.period_end}</div>
       <div class="budget-progress-bar">
-        <div class="budget-progress-fill ${fillClass}" style="width:${pct.toFixed(1)}%"></div>
+        <div class="budget-progress-fill ${fillClass}" data-pct="${pct.toFixed(1)}"></div>
       </div>
       <div class="budget-pct">${b.percentage_used.toFixed(1)}% used</div>
       <div class="budget-stats">
@@ -5385,7 +5394,7 @@ function confirmDeleteBudget(budgetId, categoryName) {
   overlay.innerHTML = `
     <div class="modal confirm-dialog">
       <p>Delete budget for "${escapeHtml(categoryName)}"?</p>
-      <p style="font-size:0.85rem;color:var(--color-text-secondary)">This action cannot be undone.</p>
+      <p class="dialog-hint">This action cannot be undone.</p>
       <div class="modal-actions">
         <button class="btn btn-outline" data-action="close-modal">Cancel</button>
         <button class="btn btn-danger" data-action="do-delete-budget" data-id="${budgetId}">Delete</button>
@@ -5486,7 +5495,7 @@ async function renderReports() {
       ${
         allTags.length > 0
           ? `
-      <div class="filter-bar" style="margin-top:var(--space-sm)">
+      <div class="filter-bar mt-sm">
         <div class="tag-filter-dropdown" id="report-tags-dropdown">
           <button type="button" class="tag-filter-btn" id="report-tags-btn">
             <span id="report-tags-label">Filter by tags</span>
@@ -5500,8 +5509,8 @@ async function renderReports() {
           : ""
       }
     </div>
-    <div id="report-summary" class="report-summary" style="display:none"></div>
-    <div id="report-charts" class="reports-charts" style="display:none">
+    <div id="report-summary" class="report-summary hidden"></div>
+    <div id="report-charts" class="reports-charts hidden">
       <div class="chart-card">
         <div class="card-title">By Category</div>
         <canvas id="spending-pie-chart"></canvas>
@@ -5511,14 +5520,14 @@ async function renderReports() {
         <canvas id="spending-line-chart"></canvas>
       </div>
     </div>
-    <div id="report-table-container" style="display:none"></div>
-    <div id="report-empty" style="display:none">
+    <div id="report-table-container" class="hidden"></div>
+    <div id="report-empty" class="hidden">
       <div class="empty-state">
         <div class="empty-icon">📊</div>
         <div class="empty-text">No expense transactions in this period</div>
       </div>
     </div>
-    <div id="report-loading" class="spinner" style="display:none"></div>
+    <div id="report-loading" class="spinner hidden"></div>
   `;
   loadReport();
 
@@ -5576,44 +5585,44 @@ async function loadReport() {
   const emptyDiv = document.getElementById("report-empty");
   const loadingDiv = document.getElementById("report-loading");
 
-  summaryDiv.style.display = "none";
-  chartsDiv.style.display = "none";
-  tableDiv.style.display = "none";
-  emptyDiv.style.display = "none";
-  loadingDiv.style.display = "";
+  summaryDiv.classList.add("hidden");
+  chartsDiv.classList.add("hidden");
+  tableDiv.classList.add("hidden");
+  emptyDiv.classList.add("hidden");
+  loadingDiv.classList.remove("hidden");
   destroyReportCharts();
 
   try {
     const data = await API.getSpendingReport(params);
-    loadingDiv.style.display = "none";
+    loadingDiv.classList.add("hidden");
 
     if (data.total_transactions === 0) {
-      emptyDiv.style.display = "";
+      emptyDiv.classList.remove("hidden");
       return;
     }
 
     // Summary cards
-    summaryDiv.style.display = "";
+    summaryDiv.classList.remove("hidden");
     summaryDiv.innerHTML = `
       <div class="stat-card expense">
         <div class="stat-value">${formatCurrency(data.total_spent)}</div>
         <div class="stat-label">Total Spent</div>
       </div>
-      <div class="stat-card" style="background:var(--color-primary-light);color:var(--color-primary)">
+      <div class="stat-card stat-card-neutral">
         <div class="stat-value">${data.total_transactions}</div>
         <div class="stat-label">Transactions</div>
       </div>
     `;
 
     // Charts
-    chartsDiv.style.display = "";
+    chartsDiv.classList.remove("hidden");
     renderSpendingPieChart(data.by_category);
     renderSpendingLineChart(data.monthly_trend);
 
     // Table
-    tableDiv.style.display = "";
+    tableDiv.classList.remove("hidden");
     tableDiv.innerHTML = `
-      <div class="card" style="margin-top:var(--space-md)">
+      <div class="card mt-md">
         <div class="card-title">Category Breakdown</div>
         <table class="category-table">
           <thead>
@@ -5636,7 +5645,7 @@ async function loadReport() {
       </div>
     `;
   } catch (err) {
-    loadingDiv.style.display = "none";
+    loadingDiv.classList.add("hidden");
     Toast.error(err.message);
   }
 }
@@ -5769,7 +5778,7 @@ async function renderSettings() {
 
   const currentProvider = settings.provider ? AI_PROVIDERS[settings.provider] : null;
   const isAzure = settings.provider === "azure";
-  const azureFieldsDisplay = isAzure ? "block" : "none";
+  const azureFieldsClass = isAzure ? "" : "hidden";
 
   const modelSuggestions = (currentProvider?.models || [])
     .map((m) => `<option value="${m}">`)
@@ -5789,8 +5798,8 @@ async function renderSettings() {
   const gmailCustomSenders = (API.getGmailCustomSenders?.() ?? []).join(", ");
 
   const onboardingBanner = fromOnboarding
-    ? `<div class="card settings-section" style="margin-bottom:var(--space-lg);border-left:4px solid var(--color-primary)">
-        <p class="text-muted" style="margin:0">
+    ? `<div class="card settings-section onboarding-banner">
+        <p class="text-muted m-0">
           ✨ <strong>Almost there!</strong> Configure your AI provider below to unlock financial coaching,
           then head to your dashboard.
         </p>
@@ -5828,7 +5837,7 @@ async function renderSettings() {
         <button class="btn btn-sm" data-action="gdrive-connect">Reconnect</button>
         <button class="btn btn-sm" data-action="gdrive-disconnect">Disable Drive Sync</button>
       </div>
-      <div class="settings-field" style="margin-top: var(--space-md)">
+      <div class="settings-field mt-md">
         <div class="gdrive-toggle-label">
           <span>Auto-sync on app open (at most once per hour)</span>
           <label class="toggle-switch">
@@ -5840,18 +5849,18 @@ async function renderSettings() {
       <div class="gdrive-last-sync text-muted">
         Last synced: ${lastSync ? new Date(lastSync).toLocaleString() : "Never"}
       </div>
-      <div class="settings-actions" style="margin-top: var(--space-md)">
+      <div class="settings-actions mt-md">
         <button id="gdrive-sync-btn" class="btn btn-primary" data-action="gdrive-sync">&#8645; Sync with Drive</button>
         <button id="gdrive-delete-btn" class="btn btn-danger btn-sm" data-action="gdrive-delete-backup" disabled aria-disabled="true">&#128465; Delete Drive Backup</button>
-        <span id="gdrive-no-backup-msg" class="text-muted" style="font-size:0.85em">Checking…</span>
+        <span id="gdrive-no-backup-msg" class="text-muted fs-sm-em">Checking…</span>
       </div>
-      <p class="text-muted gdrive-help" style="font-size: 0.85em; margin-top: var(--space-sm)">
+      <p class="text-muted gdrive-help fs-sm-em mt-sm">
         Sync merges Drive and local data &mdash; records from either side are combined,
         nothing is deleted. Safe to use across multiple devices.
       </p>
       `
       }
-      <div id="gdrive-backup-api-key-field" class="settings-field" style="margin-top: var(--space-md); display:${showKey ? "block" : "none"}">
+      <div id="gdrive-backup-api-key-field" class="settings-field mt-md ${showKey ? "" : "hidden"}">
         <div class="toggle-row">
           <span>
             Include API key in Google Drive backup
@@ -5868,7 +5877,7 @@ async function renderSettings() {
       </div>
     </div>
 
-    <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <div class="card settings-section">
       <h2>AI Settings</h2>
       <p class="text-muted">Configure your AI provider to enable chat. API keys are stored only in the Credential Vault and require an unlocked PIN to use.
         <span class="info-notice" tabindex="0" role="note" aria-label="Privacy notice">
@@ -5885,7 +5894,7 @@ async function renderSettings() {
         </select>
       </div>
 
-      <div class="settings-field" id="api-key-field" style="display:${showKey ? "block" : "none"}">
+      <div class="settings-field ${showKey ? "" : "hidden"}" id="api-key-field">
         <label for="ai-api-key">API Key</label>
         <div class="password-wrapper">          <input type="password" id="ai-api-key" class="form-control" value="${escapeHtml(settings.apiKey || "")}" placeholder="Enter API key" autocomplete="off" />
           <button type="button" class="btn btn-sm" data-action="toggle-key-visibility">Show</button>
@@ -5894,7 +5903,7 @@ async function renderSettings() {
             <span class="info-notice-tooltip">API keys are encrypted in the Credential Vault. Set up or unlock your PIN before saving them.</span>
           </span>
         </div>
-        <small class="text-muted" style="font-weight:normal;display:block;margin-top:var(--space-xs)">Optional — the app works without a key, but AI features improve accuracy and enable personalised coaching.</small>
+        <small class="text-muted fw-normal d-block mt-xs">Optional — the app works without a key, but AI features improve accuracy and enable personalised coaching.</small>
       </div>
 
       <div class="settings-field">
@@ -5902,19 +5911,19 @@ async function renderSettings() {
         ${modelInputHtml}
       </div>
 
-      <div class="settings-field" id="azure-fields" style="display:${azureFieldsDisplay}">
+      <div class="settings-field ${azureFieldsClass}" id="azure-fields">
         <label for="azure-resource-name">Resource Name</label>
         <input type="text" id="azure-resource-name" class="form-control"
                value="${escapeHtml(settings.azureResourceName || "")}" placeholder="e.g. my-openai-resource" />
-        <label for="azure-deployment-name" style="margin-top:var(--space-sm)">Deployment Name</label>
+        <label for="azure-deployment-name" class="mt-sm">Deployment Name</label>
         <input type="text" id="azure-deployment-name" class="form-control"
                value="${escapeHtml(settings.azureDeploymentName || "")}" placeholder="e.g. gpt-4o" />
-        <label for="azure-api-version" style="margin-top:var(--space-sm)">API Version</label>
+        <label for="azure-api-version" class="mt-sm">API Version</label>
         <input type="text" id="azure-api-version" class="form-control"
                value="${escapeHtml(settings.azureApiVersion || "2024-12-01-preview")}" />
       </div>
 
-      <div class="settings-field" id="ollama-base-url-field" style="display:${settings.provider === "ollama" ? "block" : "none"}">
+      <div class="settings-field ${settings.provider === "ollama" ? "" : "hidden"}" id="ollama-base-url-field">
         <label for="ollama-base-url">Ollama Base URL</label>
         <input type="url" id="ollama-base-url" class="form-control"
                value="${escapeHtml(settings.ollamaBaseUrl || "http://localhost:11434")}"
@@ -5926,7 +5935,7 @@ async function renderSettings() {
           ? `
       <div class="settings-field">
         <label>External AI consent</label>
-        <p class="text-muted" style="margin-bottom:var(--space-sm)">
+        <p class="text-muted mb-sm">
           ${
             aiConsentGranted
               ? `✓ Consent granted for ${escapeHtml(currentProvider?.name || settings.provider)}. Chat and Gmail extraction may send masked data directly to this provider from your browser.`
@@ -5952,7 +5961,7 @@ async function renderSettings() {
       <div class="settings-status" id="settings-status"></div>
     </div>
 
-    <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <div class="card settings-section">
       <h2>Data Management</h2>
       <p class="text-muted">Export your data for backup or import a previous backup.</p>
       <div class="settings-actions">
@@ -5960,7 +5969,7 @@ async function renderSettings() {
         <button class="btn" data-action="export-csv">📊 Export CSV</button>
         <button class="btn" data-action="export-pdf">🖨️ Export PDF</button>
       </div>
-      <div class="settings-field" style="margin-top: var(--space-md)">
+      <div class="settings-field mt-md">
         <label for="import-file">Import Backup</label>
         <input type="file" id="import-file" accept=".db,.sqlite,.sqlite3"
                class="form-control" data-change="import-backup" />
@@ -5970,7 +5979,7 @@ async function renderSettings() {
 ${
   isDbEmpty
     ? `
-    <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <div class="card settings-section">
       <h2>Sample Data</h2>
       <p class="text-muted">Load a realistic demo dataset (accounts, transactions, budgets,
         goals) for testing the app without connecting Gmail. Available only on an empty
@@ -5983,7 +5992,7 @@ ${
     : ""
 }
 
-    <div class="card settings-section" style="margin-top: var(--space-lg)">
+    <div class="card settings-section">
       <h2>Gmail Sync</h2>
       <p class="text-muted">Restrict email fetching to specific sender addresses or domains.
         Leave blank to use the built-in list of known bank domains.</p>
@@ -6013,7 +6022,7 @@ ${
       </div>
     </div>
 
-  <div class="card settings-section" style="margin-top: var(--space-lg)">
+  <div class="card settings-section">
     <h2>Privacy &amp; Security</h2>
     <p class="text-muted">
       Control how long your financial data and credentials persist in this browser.
@@ -6051,7 +6060,7 @@ ${
         </label>
       </div>
     </div>
-    <p class="text-muted" style="font-size:0.85em; margin-top: var(--space-sm)">
+    <p class="text-muted fs-sm-em mt-sm">
       ${
         trustedDevice
           ? "✓ Data will persist indefinitely on this device."
@@ -6063,49 +6072,49 @@ ${
   ${
     vaultConfigured
       ? `
-  <div class="card settings-section" style="margin-top: var(--space-lg)">
+  <div class="card settings-section">
     <h2>🔒 Credential Vault</h2>
     <p class="text-muted">Your AI API keys and Gmail tokens are AES-256 encrypted and only available while the vault is unlocked.</p>
     <div class="settings-field">
-      <span style="color:var(--color-success,#2ecc71)">&#10003; PIN protection active</span>
+      <span class="text-success">&#10003; PIN protection active</span>
     </div>
-    <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap;margin-top:var(--space-md,1rem)">
+    <div class="btn-group">
       <button class="btn btn-sm" data-action="vault-change-passphrase">Change PIN</button>
       <button class="btn btn-sm" data-action="vault-lock">Lock now</button>
       <button class="btn btn-sm btn-danger" data-action="vault-reset">Reset credentials</button>
     </div>
-    <div style="margin-top:var(--space-md,1rem);padding-top:var(--space-md,1rem);border-top:1px solid var(--border)">
-      <p class="text-muted" style="font-size:0.85em;margin-bottom:var(--space-sm,0.5rem)">
+    <div class="vault-bio-section">
+      <p class="text-muted fs-sm-em mb-sm">
         If this device is lost or you forget your PIN, rotate AI API keys, revoke Google access, reconnect Gmail, and restore your latest Drive backup after setting a new PIN.
       </p>
-      <p class="text-muted" style="font-size:0.85em;margin-bottom:var(--space-sm,0.5rem)">
+      <p class="text-muted fs-sm-em mb-sm">
         🫆 Biometric Unlock
-        <span style="cursor:help" title="Biometric is a convenience layer only. Your PIN provides the actual encryption key.">ℹ️</span>
+        <span class="help-cursor" title="Biometric is a convenience layer only. Your PIN provides the actual encryption key.">ℹ️</span>
       </p>
       ${
         biometricEnabled
-          ? `<span style="color:var(--color-success,#2ecc71)">✓ Biometric unlock active</span>
-           <button class="btn btn-sm btn-danger" style="margin-left:var(--space-sm,0.5rem)" data-action="disable-biometric">Disable</button>`
+          ? `<span class="text-success">✓ Biometric unlock active</span>
+           <button class="btn btn-sm btn-danger ml-sm" data-action="disable-biometric">Disable</button>`
           : biometricAvailable
             ? `<button class="btn btn-sm" data-action="enable-biometric">Enable Biometric Unlock</button>`
-            : `<span class="text-muted" style="font-size:0.85em">Not supported on this device</span>`
+            : `<span class="text-muted fs-sm-em">Not supported on this device</span>`
       }
     </div>
   </div>`
       : `
-  <div class="card settings-section" style="margin-top: var(--space-lg);border-left:3px solid var(--color-primary)">
+  <div class="card settings-section vault-setup-card">
     <h2>🔒 Credential Vault</h2>
     <p class="text-muted">
       Set up a PIN before saving AI API keys or connecting Gmail. Credential-backed features stay disabled until the vault is ready.
     </p>
-    <p class="text-muted" style="font-size:0.85em;margin-top:var(--space-xs,0.25rem)">
+    <p class="text-muted fs-sm-em mt-xs">
       Once set up, you can also enable biometric unlock (fingerprint / Face ID) for quick access. If you lose this device, rotate AI keys and revoke Google access from your Google account.
     </p>
-    <button class="btn btn-primary btn-sm" style="margin-top:var(--space-sm,0.5rem)" data-action="vault-setup">Set up PIN protection</button>
+    <button class="btn btn-primary btn-sm mt-sm" data-action="vault-setup">Set up PIN protection</button>
   </div>`
   }
 
-  <div class="card settings-section" style="margin-top: var(--space-lg)">
+  <div class="card settings-section">
     <h2>Onboarding</h2>
     <p class="text-muted">Revisit the setup guide to configure accounts, Gmail sync, or AI.</p>
     <button class="btn btn-outline" data-action="restart-onboarding">↩ Restart onboarding tour</button>
@@ -6144,7 +6153,7 @@ ${
         }
         if (noBackupMsg) {
           if (exists) {
-            noBackupMsg.style.display = "none";
+            noBackupMsg.classList.add("hidden");
           } else {
             noBackupMsg.textContent = "No backup on Drive yet";
           }
@@ -6363,27 +6372,27 @@ function onProviderChange() {
   if (provider && AI_PROVIDERS[provider]) {
     const p = AI_PROVIDERS[provider];
     if (provider === "azure") {
-      if (azureFields) azureFields.style.display = "block";
+      if (azureFields) azureFields.classList.remove("hidden");
       modelInput.value = "Set by deployment name";
       modelInput.disabled = true;
       if (datalist) datalist.innerHTML = "";
     } else {
-      if (azureFields) azureFields.style.display = "none";
+      if (azureFields) azureFields.classList.add("hidden");
       modelInput.disabled = false;
       if (datalist) datalist.innerHTML = p.models.map((m) => `<option value="${m}">`).join("");
       if (!modelInput.value) modelInput.value = p.defaultModel || "";
     }
-    keyField.style.display = p.requiresKey ? "block" : "none";
-    if (backupKeyField) backupKeyField.style.display = p.requiresKey ? "block" : "none";
-    if (ollamaField) ollamaField.style.display = provider === "ollama" ? "block" : "none";
+    keyField.classList.toggle("hidden", !p.requiresKey);
+    if (backupKeyField) backupKeyField.classList.toggle("hidden", !p.requiresKey);
+    if (ollamaField) ollamaField.classList.toggle("hidden", provider !== "ollama");
   } else {
-    if (azureFields) azureFields.style.display = "none";
+    if (azureFields) azureFields.classList.add("hidden");
     modelInput.disabled = false;
     modelInput.value = "";
     if (datalist) datalist.innerHTML = "";
-    keyField.style.display = "block";
-    if (backupKeyField) backupKeyField.style.display = "block";
-    if (ollamaField) ollamaField.style.display = "none";
+    keyField.classList.remove("hidden");
+    if (backupKeyField) backupKeyField.classList.remove("hidden");
+    if (ollamaField) ollamaField.classList.add("hidden");
   }
 }
 
@@ -6822,31 +6831,29 @@ function renderVaultUnlock() {
   const unlockPinAttrs = pinInputAttrs(API.prefersNumericPinInput(), "done");
   const overlay = document.createElement("div");
   overlay.id = "vault-unlock-screen";
-  overlay.className = "modal-overlay";
-  overlay.style.cssText =
-    "position:fixed;inset:0;background:var(--bg-primary,#111);z-index:9999;display:flex;align-items:center;justify-content:center";
+  overlay.className = "modal-overlay vault-unlock-overlay";
   overlay.innerHTML = `
-    <div class="card" style="max-width:420px;width:100%;padding:var(--space-xl,2rem)">
-      <h2 style="margin-bottom:var(--space-md,1rem)">🔒 Unlock Your Data</h2>
+    <div class="card vault-unlock-card">
+      <h2 class="mb-md">🔒 Unlock Your Data</h2>
       <p class="text-muted">Your credentials are protected. Enter your PIN to continue.</p>
       ${
         biometricEnabled
           ? `
-        <button class="btn btn-primary" style="width:100%;margin-bottom:var(--space-md,1rem)"
+        <button class="btn btn-primary btn-full mb-md"
                 data-action="unlock-biometric">🫆 Unlock with Biometrics</button>
-        <hr style="margin:var(--space-md,1rem) 0">
+        <hr class="hr-md">
       `
           : ""
       }
-      <div id="vault-unlock-error" class="alert alert-danger" style="display:none;margin-bottom:var(--space-md,1rem)"></div>
-      <div class="form-group" style="margin-bottom:var(--space-md,1rem)">
+      <div id="vault-unlock-error" class="alert alert-danger hidden mb-md"></div>
+      <div class="form-group mb-md">
         <label class="form-label">PIN</label>
         <input type="password" id="vault-unlock-passphrase" class="form-control"
                placeholder="Enter PIN" autocomplete="current-password" ${unlockPinAttrs}>
       </div>
-      <div style="display:flex;gap:var(--space-sm,0.5rem);flex-wrap:wrap">
+      <div class="btn-row">
         <button class="btn btn-primary" data-action="unlock-vault">Unlock</button>
-        <button class="btn btn-link" data-action="vault-forgot-passphrase" style="margin-left:auto">Forgot PIN?</button>
+        <button class="btn btn-link ml-auto" data-action="vault-forgot-passphrase">Forgot PIN?</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -6865,12 +6872,12 @@ async function doUnlockVault() {
   const passphrase = input.value.trim();
   if (!passphrase) {
     errEl.textContent = "Please enter your PIN.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   if (API.prefersNumericPinInput() && !isExistingNumericPin.test(passphrase)) {
     errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   try {
@@ -6890,13 +6897,13 @@ async function doUnlockVault() {
       }
     } else {
       errEl.textContent = "Incorrect PIN. Please try again.";
-      errEl.style.display = "";
+      errEl.classList.remove("hidden");
       input.value = "";
       input.focus();
     }
   } catch (err) {
     errEl.textContent = `Unlock failed: ${err.message}`;
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
   }
 }
 
@@ -6913,13 +6920,13 @@ async function doUnlockWithBiometric() {
     } else {
       if (errEl) {
         errEl.textContent = "Biometric unlock failed. Please enter your PIN.";
-        errEl.style.display = "";
+        errEl.classList.remove("hidden");
       }
     }
   } catch (err) {
     if (errEl) {
       errEl.textContent = `Biometric error: ${err.message}`;
-      errEl.style.display = "";
+      errEl.classList.remove("hidden");
     }
   }
 }
@@ -6933,12 +6940,12 @@ async function doDisableBiometric() {
 function doSetupBiometric() {
   const currentPinAttrs = pinInputAttrs(API.prefersNumericPinInput(), "done");
   const html = `
-    <div id="biometric-setup-modal" class="modal-overlay" style="z-index:10000">
+    <div id="biometric-setup-modal" class="modal-overlay modal-overlay-top">
       <div class="modal">
         <h3>Enable Biometric Unlock</h3>
         <p>Your device will ask for fingerprint or face verification to confirm setup.</p>
-        <p class="text-muted" style="font-size:0.85em">Biometric is a convenience layer only — your PIN remains the primary security key.</p>
-        <div id="biometric-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <p class="text-muted fs-sm-em">Biometric is a convenience layer only — your PIN remains the primary security key.</p>
+        <div id="biometric-setup-error" class="alert alert-danger hidden mb-md"></div>
         <div class="form-group">
           <label class="form-label">Confirm your current PIN</label>
           <input type="password" id="biometric-setup-passphrase" class="form-control" autocomplete="current-password" placeholder="Enter PIN" ${currentPinAttrs}>
@@ -6957,12 +6964,12 @@ async function doConfirmBiometricSetup() {
   const errEl = document.getElementById("biometric-setup-error");
   if (!passphrase) {
     errEl.textContent = "Please enter your PIN.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   if (API.prefersNumericPinInput() && !isExistingNumericPin.test(passphrase)) {
     errEl.textContent = "PIN must contain only digits and be at least 4 digits.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   try {
@@ -6975,13 +6982,13 @@ async function doConfirmBiometricSetup() {
       err.message === "Biometric PRF unavailable"
         ? "Biometric unlock is not supported in this browser/app yet. Please use your PIN."
         : err.message || "Failed to enable biometric unlock.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
   }
 }
 
 function showVaultForgotModal() {
   const html = `
-    <div id="vault-forgot-modal" class="modal-overlay" style="z-index:10000">
+    <div id="vault-forgot-modal" class="modal-overlay modal-overlay-top">
       <div class="modal">
         <h3>Reset Credentials</h3>
         <p>Your <strong>financial data is safe</strong> — only your AI API keys and Gmail connection will be cleared.</p>
@@ -6999,12 +7006,12 @@ function showVaultSetupModal() {
   const newPinAttrs = pinInputAttrs(true, "next");
   const confirmPinAttrs = pinInputAttrs(true, "done");
   const html = `
-    <div id="vault-setup-modal" class="modal-overlay" style="z-index:10000">
+    <div id="vault-setup-modal" class="modal-overlay modal-overlay-top">
       <div class="modal">
         <h3>🔒 Protect Your Credentials</h3>
         <p>Encrypt your API keys and Gmail tokens with a PIN so they are never stored in plaintext.</p>
         <p class="text-muted">If you forget your PIN, you can always reset and re-enter your credentials. Your financial data is never affected.</p>
-        <div id="vault-setup-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <div id="vault-setup-error" class="alert alert-danger hidden mb-md"></div>
         <div class="form-group">
           <label class="form-label">PIN <span class="text-muted">(digits only, min 6)</span></label>
           <input type="password" id="vault-setup-passphrase" class="form-control" placeholder="Choose a PIN" autocomplete="new-password" ${newPinAttrs}>
@@ -7032,19 +7039,19 @@ async function doSetupVault() {
   const errEl = document.getElementById("vault-setup-error");
   if (!isNumericPin(passphrase)) {
     errEl.textContent = "PIN must contain only digits and be at least 6 digits.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   if (passphrase !== confirm) {
     errEl.textContent = "PINs do not match.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   try {
     await API.setupVault(passphrase);
   } catch (err) {
     errEl.textContent = `Failed to set up PIN: ${err.message}`;
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   document.getElementById("vault-setup-modal")?.remove();
@@ -7059,10 +7066,10 @@ function showChangePassphraseModal() {
   const newPinAttrs = pinInputAttrs(true, "next");
   const confirmPinAttrs = pinInputAttrs(true, "done");
   const html = `
-    <div id="vault-change-modal" class="modal-overlay" style="z-index:10000">
+    <div id="vault-change-modal" class="modal-overlay modal-overlay-top">
       <div class="modal">
         <h3>Change PIN</h3>
-        <div id="vault-change-error" class="alert alert-danger" style="display:none;margin-bottom:1rem"></div>
+        <div id="vault-change-error" class="alert alert-danger hidden mb-md"></div>
         <div class="form-group">
           <label class="form-label">Current PIN</label>
           <input type="password" id="vault-change-old" class="form-control" autocomplete="current-password" ${currentPinAttrs}>
@@ -7095,19 +7102,19 @@ async function doChangePassphrase() {
   const errEl = document.getElementById("vault-change-error");
   if (!isNumericPin(newP)) {
     errEl.textContent = "New PIN must contain only digits and be at least 6 digits.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   if (newP !== confirmP) {
     errEl.textContent = "New PINs do not match.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   try {
     await API.changeVaultPassphrase(oldP, newP);
   } catch (err) {
     errEl.textContent = err.message || "Failed to change PIN.";
-    errEl.style.display = "";
+    errEl.classList.remove("hidden");
     return;
   }
   document.getElementById("vault-change-modal")?.remove();

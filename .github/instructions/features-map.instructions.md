@@ -677,6 +677,16 @@ const html = window.marked(markdownText);
 const safeHtml = window.DOMPurify.sanitize(userInput);
 ```
 
+## No Inline Styles (CSP `style-src 'self'`)
+
+The CSP forbids inline styles, so the browser ignores any `style="..."` attribute.
+`app.js` render functions must use CSS classes only:
+- Visibility toggling uses the `.hidden` class (`display:none !important`) via
+  `classList.toggle("hidden", cond)` — never `el.style.*`.
+- Semantic/utility classes live in `styles.css` (`.balance-card` centre-aligns the
+  dashboard balance card, `.btn-group` wraps button clusters, `.btn-reimport`, etc.).
+- `tests/js/app.test.js` guards that `static/js/app.js` has zero `style="` occurrences.
+
 ## Development Workflow
 
 1. **Make changes** to production code in `static/js/`
