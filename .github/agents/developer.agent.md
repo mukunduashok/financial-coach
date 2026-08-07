@@ -82,8 +82,10 @@ Always read a file before editing it. Use `multi_replace_string_in_file` when ma
 9. **Verify branch and staged changes**: confirm the active branch is the
 	orchestrator-approved, non-`main` branch; inspect staged changes before committing.
 10. **Commit task-owned changes only**: commit only files owned by the assigned task.
-11. **Push and open the PR**: push only the approved feature branch, create one pull request
-	from that branch to `main`, and include the validation summary in the PR description.
+11. **Push and open the PR**: before PR work, follow the
+	[GitHub PR operations skill](../skills/github-pr-operations/SKILL.md); push only the approved
+	feature branch, create one pull request from that branch to `main`, and include the validation
+	summary in the PR description.
 
 ## Implementation Rules
 

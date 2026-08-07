@@ -85,6 +85,9 @@ If the tester created bug work items in plane.so (max 2 iterations):
     - Any open bug work items still in plane.so
 16. If the work originated from a plane.so work item and all tests pass, invoke the **plane** subagent to move it to **Done** state.
 
+For any delegated pull-request creation, update, or ready-for-review operation, require the
+delegated agent to follow the [GitHub PR operations skill](../skills/github-pr-operations/SKILL.md).
+
 ## Tool Usage
 
 Use the best available tool for each situation:

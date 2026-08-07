@@ -100,10 +100,11 @@ Write tests for newly implemented code based on a plan and implementation summar
 9. **Run E2E tests** (if UI changed): `make test-e2e`
 10. **Fix failures**: Read error output, fix the test (or report as production bug).
 11. **Log bugs in plane.so** — if production code is broken, create a work item via the `plane` agent. Include title, description of expected vs actual, reproduction steps, severity (priority), and the related task name. **If the bug is security-related** (XSS, injection, insecure storage, auth weakness, CSP misconfiguration, data exposure, or any OWASP Top 10 category), you MUST also apply the `security` label to the work item. Before logging, filter open work items with label `security` and state ≠ Done to avoid duplicates.
-12. **Verify PR status**: use GitHub tools to inspect the pull request and its checks. Do not
-  create a duplicate pull request; create one only when the developer made none, the
-  orchestrator explicitly delegates it, and the active branch is the verified delegated
-  non-`main` branch.
+12. **Verify PR status**: before PR work, follow the
+  [GitHub PR operations skill](../skills/github-pr-operations/SKILL.md). Use GitHub tools to
+  inspect the pull request and its checks. Do not create a duplicate pull request; create one
+  only when the developer made none, the orchestrator explicitly delegates it, and the active
+  branch is the verified delegated non-`main` branch.
 
 ### Mode 2: Ad-Hoc Regression (invoked directly by user)
 
