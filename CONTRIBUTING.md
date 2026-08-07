@@ -65,22 +65,24 @@ Examples: `feat/cash-flow-forecast`, `fix/gmail-dedup-sip`.
 
 ## Development Workflow
 
-1. Create a branch from `main`.
-2. Make focused, minimal changes that follow the conventions above.
-3. **Lint after every change:**
+1. Do not implement, commit, or push directly on `main`.
+2. Before work begins, choose whether to create a new branch from the latest `main` or use an existing branch.
+3. For a new branch, fetch `origin/main`, fast-forward local `main`, then create and switch to a descriptive branch. For an existing branch, safely switch to it without overwriting local work.
+4. Confirm the active branch is not `main`, then make focused, minimal changes that follow the conventions above.
+5. **Lint after every change:**
    ```bash
    make lint
    ```
-4. **Add or update tests:**
+6. **Add or update tests:**
    - Unit tests → `tests/js/<module>.test.js`
    - E2E / UI tests → `tests/e2e/js/<feature>.spec.js`
-5. **Run the test suites and verify everything passes:**
+7. **Run the test suites and verify everything passes on the same branch:**
    ```bash
    make test-unit   # Vitest unit tests
    make test-e2e    # Playwright E2E tests (required if you change UI/routes)
    make clean-ports # Kill orphaned dev/test servers afterwards
    ```
-6. Ensure **no regressions** — every previously passing test must still pass.
+8. Ensure **no regressions** — every previously passing test must still pass.
 
 ### Required test coverage
 

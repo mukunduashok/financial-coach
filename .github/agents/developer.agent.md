@@ -1,7 +1,7 @@
 ---
 name: "developer"
 description: "Use when: implementing code changes from an approved plan. Writes production code following project standards. Does NOT write tests — the tester agent handles that."
-tools: [read, edit, search, execute]
+tools: [read, edit, search, execute, github/*]
 user-invocable: false
 ---
 
@@ -68,22 +68,35 @@ Always read a file before editing it. Use `multi_replace_string_in_file` when ma
 
 ## Implementation Process
 
-1. **Read the plan** carefully. Understand every file change required.
-2. **Read existing files** that will be modified — understand current patterns before changing them.
-3. **Implement in order**: `db.js` → `ai.js` → `gdrive.js` → `gmail.js` → `api.js` → `app.js` → `main.js` → `index.html`
-4. **Run lint** after all changes: `make lint`
-5. **Fix any lint errors** that arise.
-6. **Run existing tests** to verify nothing is broken: `make test-unit`
-7. **Fix any test failures** caused by the changes.
+1. **Prepare the approved branch** before reading or modifying files:
+	- For a new branch, fetch `origin/main`, fast-forward local `main` from it, then create and switch to the approved branch.
+	- For an existing branch, safely switch to the user-approved branch without overwriting or discarding local work.
+	- Verify the active branch is not `main`; otherwise, stop and escalate to the orchestrator.
+2. **Read the plan** carefully. Understand every file change required.
+3. **Read existing files** that will be modified — understand current patterns before changing them.
+4. **Implement in order**: `db.js` → `ai.js` → `gdrive.js` → `gmail.js` → `api.js` → `app.js` → `main.js` → `index.html`
+5. **Run lint** after all changes: `make lint`
+6. **Fix any lint errors** that arise.
+7. **Run existing tests** to verify nothing is broken: `make test-unit`
+8. **Fix any test failures** caused by the changes.
+9. **Verify branch and staged changes**: confirm the active branch is the
+	orchestrator-approved, non-`main` branch; inspect staged changes before committing.
+10. **Commit task-owned changes only**: commit only files owned by the assigned task.
+11. **Push and open the PR**: push only the approved feature branch, create one pull request
+	from that branch to `main`, and include the validation summary in the PR description.
 
 ## Implementation Rules
 
 - **Follow the plan**: Implement exactly what was approved. Do not add extra features or refactor unrelated code.
+- **Never work on `main`**: Do not implement, commit, or push on `main`. Refuse and escalate if `main` is active or no approved non-`main` branch was supplied.
 - **Mirror existing patterns**: Before writing a new module/function, read an existing similar one.
 - **Small, focused functions**: Each function does one thing.
 - **No test code**: Do not create or modify files in `tests/`. The tester agent handles testing.
 - **No magic values**: Use named constants from `config.js`.
 - **CDN globals**: Access Chart, marked, DOMPurify via `window.*` — never import them.
+- **Git safety**: Never force-push, push directly to `main`, or commit/push from a branch that
+	does not match the orchestrator-approved branch. Report the commit SHA, branch, and pull
+	request after creating it.
 
 ## Output Format
 
@@ -91,6 +104,9 @@ After implementation, return a summary:
 
 ```markdown
 ## Implementation Summary
+
+### Active Branch
+- `feat/example` — Prepared from the latest `main` / user-approved existing branch
 
 ### Files Created
 - `static/js/x.js` — Description
