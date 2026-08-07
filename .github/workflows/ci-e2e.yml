@@ -1,6 +1,7 @@
 name: PR E2E Tests
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -14,6 +15,7 @@ permissions:
 jobs:
   e2e-tests:
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-e2e') ||
       (github.event.action == 'ready_for_review' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
     runs-on: ubuntu-latest

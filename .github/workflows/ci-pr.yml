@@ -1,6 +1,7 @@
 name: PR Lint and Unit Tests
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
