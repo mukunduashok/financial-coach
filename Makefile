@@ -46,7 +46,17 @@ deploy: gen-env
 	npx wrangler pages deploy static --project-name=finance-coach-pro && \
 	git checkout static/js/sw.js static/_headers
 
-test-e2e: clean-ports
+test-e2e:
+	@set -eu; \
+	if lsof -ti :8111 >/dev/null; then \
+		echo "Port 8111 is already in use; stop the existing server before running E2E tests." >&2; \
+		exit 1; \
+	fi; \
+	npx serve static -l 8111 --cors > /tmp/financial-coach-e2e-server.log 2>&1 & \
+	server_pid=$$!; \
+	trap 'kill $$server_pid 2>/dev/null || true' EXIT INT TERM; \
+	npx wait-on http://127.0.0.1:8111 --timeout 30000; \
+	kill -0 $$server_pid; \
 	npx playwright test
 
 # ─── Combined ─────────────────────────────────────────────────────────────────
@@ -62,7 +72,6 @@ clean:
 	rm -rf node_modules/.cache
 
 clean-ports:
-	@echo "Killing processes on ports 8111, 8082..."
+	@echo "Killing processes on port 8111..."
 	@-lsof -ti :8111 | xargs -r kill 2>/dev/null; true
-	@-lsof -ti :8082 | xargs -r kill 2>/dev/null; true
 	@echo "Done."

@@ -18,7 +18,8 @@
     "@playwright/test": "^1.52.0",
     "jsdom": "^29.1.1",
     "sql.js": "^1.11.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "wait-on": "^9.1.0"
   },
   "overrides": {
     "undici": "7.29.0"

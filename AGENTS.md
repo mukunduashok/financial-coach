@@ -39,7 +39,7 @@ npx playwright test   # Run E2E tests
 make sync             # Install all dependencies
 make lint             # Lint JS
 make test             # Run all tests (unit + E2E)
-make clean-ports      # Kill orphaned servers on dev/test ports (8111, 8082)
+make clean-ports      # Kill orphaned servers on dev/test port 8111
 ```
 
 ### Forbidden Actions

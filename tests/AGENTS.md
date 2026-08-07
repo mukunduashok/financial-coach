@@ -38,7 +38,7 @@ tests/e2e/js/          # Playwright E2E tests (run with: make test-e2e)
   sync.spec.js         # Gmail sync screen, date-range validation
   taxonomy.spec.js     # Category/merchant/tag management
   transactions.spec.js # Add/edit/delete/filter transactions
-  fixtures.js          # pwaPage fixture — fresh DB, app at :8082
+  fixtures.js          # pwaPage fixture — fresh DB, app at :8111
 ```
 
 ## Commands
@@ -47,7 +47,7 @@ tests/e2e/js/          # Playwright E2E tests (run with: make test-e2e)
 make test-unit                         # Run all Vitest unit tests
 npx vitest run tests/js/x.test.js     # Run a specific unit test file
 make test-e2e                          # Run all Playwright E2E tests
-npx playwright test tests/e2e/js/x.spec.js  # Run a specific E2E spec
+npx playwright test tests/e2e/js/x.spec.js  # Run a specific E2E spec (server required on :8111)
 make lint                              # Lint test files too (biome checks tests/)
 make clean-ports                       # Kill orphaned servers after E2E
 ```

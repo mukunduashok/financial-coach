@@ -159,7 +159,7 @@ make test-unit      # JS unit tests (vitest)
 make test-e2e       # Playwright E2E tests
 make deploy         # Deploy to Cloudflare Pages
 make test           # Run all tests (unit + E2E)
-make clean-ports    # Kill orphaned servers on :8080, :8082
+make clean-ports    # Kill orphaned servers on :8111
 ```
 
 ## Guardrails

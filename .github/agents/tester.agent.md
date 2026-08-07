@@ -50,7 +50,7 @@ tests/e2e/js/                # Playwright E2E tests
   settings.spec.js           # Settings screen — AI config, GDrive sync, session security, legal footer links
   taxonomy.spec.js           # Taxonomy screen
   transactions.spec.js       # Transactions screen
-  fixtures.js                # pwaPage fixture (fresh DB, loads at :8082)
+  fixtures.js                # pwaPage fixture (fresh DB, loads at :8111)
   privacy.spec.js            # Privacy mode (hide/reveal amounts) + LegalPages smoke tests (privacy.html, terms.html)
 ```
 
@@ -59,7 +59,7 @@ Test commands:
 make test-unit                      # Run all JS unit tests (Vitest)
 npx vitest run tests/js/x.test.js  # Run specific test file
 make test-e2e                       # Run all E2E tests (Playwright)
-npx playwright test tests/e2e/js/x.spec.js  # Run specific spec
+npx playwright test tests/e2e/js/x.spec.js  # Run specific spec (server required on :8111)
 ```
 
 ## Tool Usage
@@ -111,12 +111,12 @@ Write tests for newly implemented code based on a plan and implementation summar
 ### Mode 3: Browser / E2E Testing (invoked directly by user)
 
 **Server Startup**:
-1. Check if already running: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8082`
+1. Check if already running: `curl -s -o /dev/null -w "%{http_code}" http://localhost:8111`
 2. If not running, start: `make dev` (async mode)
 3. Verify ready — expect `200`.
 
 **Process**:
-1. Navigate to `http://localhost:8082` using `mcp_com_microsoft_browser_navigate`.
+1. Navigate to `http://localhost:8111` using `mcp_com_microsoft_browser_navigate`.
 2. Take a snapshot using `mcp_com_microsoft_browser_snapshot`.
 3. Execute the test scenario (smoke, feature, usability, visual check).
 4. Check for errors — `mcp_com_microsoft_browser_console_messages`.

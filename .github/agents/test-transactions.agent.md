@@ -16,8 +16,8 @@ Perform thorough testing of the Transactions screen (`#/transactions`, `#/transa
 ## Server Setup
 ```bash
 # Check if running
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8082
-# If not: Playwright starts its own at port 8082 via playwright.config.js
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8111
+# If not: start `npx serve static -l 8111 --cors` before running a specific Playwright spec.
 ```
 
 ## Seed Data Pattern

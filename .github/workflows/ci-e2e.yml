@@ -1,0 +1,47 @@
+name: PR E2E Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - labeled
+      - ready_for_review
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-tests:
+    if: >-
+      (github.event.action == 'labeled' && github.event.label.name == 'run-e2e') ||
+      (github.event.action == 'ready_for_review' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      - name: Start static server
+        run: npx serve static -l 8111 --cors &
+      - run: npx wait-on http://localhost:8111 --timeout 30000
+      - run: npx playwright test --reporter=github,html
+      - name: Stop static server
+        if: always()
+        run: pkill -f "serve static -l 8111" || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14

@@ -6,16 +6,11 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: true,
-  retries: 1,
+  retries: process.env.CI ? 2 : 1,
   workers: process.env.CI ? 2 : 4,
   use: {
-    baseURL: "http://127.0.0.1:8082",
+    baseURL: "http://127.0.0.1:8111",
     browserName: "chromium",
     headless: true,
-  },
-  webServer: {
-    command: "npx serve static -l 8082 --cors",
-    url: "http://127.0.0.1:8082",
-    reuseExistingServer: !process.env.CI,
   },
 });
