@@ -1,7 +1,7 @@
 ---
 name: "tester"
 description: "Use when: writing and running unit tests, running ad-hoc regression, browser/E2E testing with Playwright, API smoke testing, or usability testing. Supports both backend and frontend testing."
-tools: [read, edit, search, execute, agent, com.microsoft/playwright-mcp/*]
+tools: [read, edit, search, execute, agent, com.microsoft/playwright-mcp/*, github/*]
 agents: [plane]
 ---
 
@@ -87,18 +87,23 @@ npx playwright test tests/e2e/js/x.spec.js  # Run specific spec (server required
 
 ### Mode 1: Post-Implementation Testing (invoked by orchestrator)
 
-Write tests for newly implemented code based on a plan and implementation summary.
+Write tests for newly implemented code based on a plan and implementation summary. Remain on the developer-reported branch for all testing; never switch to or test changes from `main`.
 
-1. **Read the implementation summary** to understand what was built.
-2. **Read the production code** that was created/modified.
-3. **Study existing test patterns** — read 1-2 similar test files.
-4. **Write unit tests** in `tests/js/<module>.test.js`.
-5. **Write E2E tests** in `tests/e2e/js/<feature>.spec.js` if UI/routes changed.
-6. **Run lint**: `make lint`
-7. **Run unit tests**: `make test-unit`
-8. **Run E2E tests** (if UI changed): `make test-e2e`
-9. **Fix failures**: Read error output, fix the test (or report as production bug).
-10. **Log bugs in plane.so** — if production code is broken, create a work item via the `plane` agent. Include title, description of expected vs actual, reproduction steps, severity (priority), and the related task name. **If the bug is security-related** (XSS, injection, insecure storage, auth weakness, CSP misconfiguration, data exposure, or any OWASP Top 10 category), you MUST also apply the `security` label to the work item. Before logging, filter open work items with label `security` and state ≠ Done to avoid duplicates.
+1. **Verify the active branch** matches the developer-reported branch and is not `main`; otherwise, stop and escalate to the orchestrator.
+2. **Read the implementation summary** to understand what was built.
+3. **Read the production code** that was created/modified.
+4. **Study existing test patterns** — read 1-2 similar test files.
+5. **Write unit tests** in `tests/js/<module>.test.js`.
+6. **Write E2E tests** in `tests/e2e/js/<feature>.spec.js` if UI/routes changed.
+7. **Run lint**: `make lint`
+8. **Run unit tests**: `make test-unit`
+9. **Run E2E tests** (if UI changed): `make test-e2e`
+10. **Fix failures**: Read error output, fix the test (or report as production bug).
+11. **Log bugs in plane.so** — if production code is broken, create a work item via the `plane` agent. Include title, description of expected vs actual, reproduction steps, severity (priority), and the related task name. **If the bug is security-related** (XSS, injection, insecure storage, auth weakness, CSP misconfiguration, data exposure, or any OWASP Top 10 category), you MUST also apply the `security` label to the work item. Before logging, filter open work items with label `security` and state ≠ Done to avoid duplicates.
+12. **Verify PR status**: use GitHub tools to inspect the pull request and its checks. Do not
+  create a duplicate pull request; create one only when the developer made none, the
+  orchestrator explicitly delegates it, and the active branch is the verified delegated
+  non-`main` branch.
 
 ### Mode 2: Ad-Hoc Regression (invoked directly by user)
 
@@ -194,6 +199,10 @@ test.describe('MyFeature', () => {
 ## Rules
 
 - **Only modify `tests/`** — never touch `static/` production code.
+- **Stay on the developer branch** — never switch to, commit to, push to, or test implementation work from `main`.
+- **Branch and PR safety**: verify the active branch matches the delegated non-`main` branch.
+  After validation, you may commit and push tester-owned tests or documentation only on that
+  branch. Use GitHub tools for pull-request inspection and status checks.
 - **Follow existing patterns** — read similar test files first.
 - **Log defects in plane.so** — discover bugs → create work items via the `plane` agent with severity (priority), description, and reproduction steps.
 - **Update bug status** — after re-verification, update each bug's state in plane.so (move to Done if resolved; leave as-is if still open with a comment).
@@ -240,6 +249,9 @@ test.describe('MyFeature', () => {
 
 ```markdown
 ## Test Summary
+
+### Active Branch
+- `feat/example` — Matches the developer-reported branch
 
 ### Files Created
 - `tests/js/x.test.js` — 8 unit tests for X module

@@ -61,6 +61,7 @@ make clean-ports    # Kill orphaned servers on dev/test ports
 - Run `make test-unit` to verify changes don't break unit tests
 - Run `make test-e2e` to run Playwright E2E tests
 - Never commit secrets or API keys
+- Never implement, commit, or push directly on `main`. After plan approval, ask whether to create a new branch from the latest `main` or use an existing branch; prepare that branch before development and keep testing on it.
 
 ## Mandatory After Every Change
 
@@ -118,9 +119,9 @@ localStorage.removeItem('fincoach-trusted-device');
 
 ## Agent Roles
 
-- **Developer agent**: Implements code + writes **unit tests**. In fix mode, checks assigned plane.so work items for open bugs. Runs lint and unit tests before reporting.
-- **Tester agent**: Writes **functional, integration, UI, and E2E tests**. MUST write E2E tests for any UI/route changes. Creates plane.so work items for implementation bugs. Runs full test suite and ensures zero regressions. **After every feature/fix, updates agent files** (features-map, tester.agent.md, AGENTS.md, CLAUDE.md) to reflect the current project state.
-- **Orchestrator agent**: Coordinates the workflow including the **bug-fix loop** (max 2 iterations). When delegating to the tester, specifies which test types are expected (E2E for UI changes, integration for API wiring, functional for new modules). Checks plane.so work items after testing. Escalates to user if bugs persist after 2 loops.
+- **Developer agent**: Prepares the approved non-`main` branch, implements code, and writes **unit tests**. In fix mode, checks assigned plane.so work items for open bugs. Runs lint and unit tests before reporting the active branch.
+- **Tester agent**: Verifies it remains on the developer's branch, then writes **functional, integration, UI, and E2E tests**. MUST write E2E tests for any UI/route changes. Creates plane.so work items for implementation bugs. Runs full test suite and ensures zero regressions. **After every feature/fix, updates agent files** (features-map, tester.agent.md, AGENTS.md, CLAUDE.md) to reflect the current project state.
+- **Orchestrator agent**: Coordinates plan → approval → explicit branch choice → branch preparation → implementation → testing, including the **bug-fix loop** (max 2 iterations). It must not delegate implementation on `main`. When delegating to the tester, specifies which test types are expected (E2E for UI changes, integration for API wiring, functional for new modules). Checks plane.so work items after testing. Escalates to user if bugs persist after 2 loops.
 
 ## Reading Plane.so Tickets — Always Check Comments
 

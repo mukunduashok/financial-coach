@@ -174,6 +174,7 @@ make clean-ports    # Kill orphaned servers on :8111
 - Run `make lint` after every JS change
 - Run `make test-unit` after every JS change and verify all tests pass
 - Zero tolerance for regressions — fix any failing tests before reporting
+- Never implement, commit, or push directly on `main`. After plan approval, the orchestrator must obtain the user's explicit choice to create a branch from the latest `main` or use an existing branch. The developer prepares that branch and confirms it is active before work begins; the tester remains on the same branch.
 
 ## Gmail Transaction Deduplication
 

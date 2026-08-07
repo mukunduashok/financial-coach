@@ -47,6 +47,7 @@ make clean-ports      # Kill orphaned servers on dev/test port 8111
 - Never commit `.env`, secrets, or API keys
 - Never add dependencies without adding them to `package.json`
 - Never push code without running the appropriate lint and test commands
+- Never implement, commit, or push changes directly on `main`
 - Never add runtime npm dependencies — the JS app has zero runtime deps
 - Never add a bundler or build step to the frontend
 
@@ -56,6 +57,15 @@ make clean-ports      # Kill orphaned servers on dev/test port 8111
 - Do not delete files or branches without confirmation
 - Do not modify `.env` or production configuration
 - Always run `make clean-ports` after running dev servers (`make dev`) or E2E tests (`make test-e2e`) to kill orphaned processes
+
+### Branch Workflow
+
+All changes must follow this sequence: plan approval → user branch choice → branch preparation → development → testing on the same branch.
+
+- After plan approval, the orchestrator asks whether to create a new branch from the latest `main` or use an existing branch. It must receive an explicit response before delegating implementation.
+- For a new branch, the developer fetches and fast-forwards local `main` from `origin/main`, then creates and switches to the approved branch.
+- For an existing branch, the developer safely switches to the user-approved branch without replacing or discarding local work.
+- Developers may switch to `main` only to fast-forward it during new-branch preparation. They must never modify, commit, or push `main`; testers must never switch to `main`. If `main` is active after preparation or when work is delegated, stop and escalate to the orchestrator.
 
 ## Agent Roles & Responsibilities
 
@@ -99,7 +109,7 @@ This project uses three specialized agents coordinated by an orchestrator:
   - E2E / PWA smoke tests → `tests/e2e/js/`
 
 ### Orchestrator Agent
-- Coordinates Plan → Approve → Implement → Test → **Fix Loop** workflow
+- Coordinates Plan → Approve → Branch Choice → Branch Preparation → Implement → Test → **Fix Loop** workflow
 - Delegates code changes to the developer agent and testing to the tester agent
 - **When delegating to the tester**, MUST specify which test types are expected based on the changes:
   - UI changes (new screens, routes, nav items) → request **E2E tests** in `tests/e2e/js/`
@@ -118,23 +128,26 @@ This project uses three specialized agents coordinated by an orchestrator:
 
 Follow this sequence for every code change:
 
-1. **Understand** — Read relevant source files before modifying
-2. **Identify stack** — Check which files are affected:
+1. **Plan approval** — Obtain explicit approval for the implementation plan.
+2. **Branch choice** — The orchestrator asks the user to choose a new branch from the latest `main` or an existing branch.
+3. **Branch preparation** — Prepare the approved branch and verify it is active before modifying files.
+4. **Understand** — Read relevant source files before modifying.
+5. **Identify stack** — Check which files are affected:
    - `static/**`, `tests/js/**`, `tests/e2e/js/**` → JS stack
-3. **Implement** — Make minimal changes following project standards
-4. **Lint** — Run the linter **immediately after every change**:
+6. **Implement** — Make minimal changes following project standards.
+7. **Lint** — Run the linter **immediately after every change**:
    - JS: `make lint`
-5. **Write tests** — Add/update tests in the appropriate location:
+8. **Write tests** — Add/update tests in the appropriate location:
    - Developer agent: unit tests (`tests/js/`)
    - Tester agent: functional, UI, E2E tests (`tests/e2e/js/`)
-6. **Run tests** — Run the correct tests and **verify all pass**:
+9. **Run tests** — Run the correct tests and **verify all pass**:
    - JS: `make test-unit`
-7. **Regression check** — Ensure no previously passing tests are now failing
-8. **Smoke test** — Verify the change works:
+10. **Regression check** — Ensure no previously passing tests are now failing.
+11. **Smoke test** — Verify the change works:
    - JS: `make dev` → open browser, check console
-9. **Bug logging** (tester only) — Create a plane.so work item for any implementation bugs found (see Bug Report Format below)
-10. **Fix loop** (orchestrator) — If there are open plane.so bugs, delegate fix → re-verify (max 2 iterations)
-11. **Report** — Summarize what changed, what was tested, and any unresolved bugs
+12. **Bug logging** (tester only) — Create a plane.so work item for any implementation bugs found (see **Bug Report Format** below).
+13. **Fix loop** (orchestrator) — If there are open plane.so bugs, delegate fix → re-verify (max 2 iterations).
+14. **Report** — Summarize the active branch, what changed, what was tested, and any unresolved bugs.
 
 ### Bug-Fix Feedback Loop
 
