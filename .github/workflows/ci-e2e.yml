@@ -2,11 +2,16 @@ name: PR E2E Tests
 
 on:
   workflow_dispatch:
-  merge_group:
+  pull_request:
     branches:
       - main
     types:
-      - checks_requested
+      - ready_for_review
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

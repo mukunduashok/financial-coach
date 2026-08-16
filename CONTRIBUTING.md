@@ -98,9 +98,11 @@ Examples: `feat/cash-flow-forecast`, `fix/gmail-dedup-sip`.
 2. Keep PRs small and scoped to a single concern.
 3. Write a clear description: what changed, why, and how it was tested.
 4. Link any related issues.
-5. After approval, add the PR to the `main` merge queue. GitHub runs the required
-  `lint-and-unit-tests` and `e2e-tests` checks on the merge-group commit; use an Actions
-  `workflow_dispatch` run when an explicit manual E2E check is needed.
+5. Lint and unit checks run on PR commits. For a draft PR targeting `main`, E2E starts when it is
+  marked ready for review. Start E2E manually with `workflow_dispatch` after later commits or
+  for a normal non-draft PR. The required `lint-and-unit-tests` and `e2e-tests` checks block the
+  merge. A later ready-for-review event cancels queued or in-progress E2E for that PR; manual E2E
+  runs have separate groups and do not cancel PR-triggered or other manual runs.
 6. Do **not** commit secrets, API keys, or `.env` files.
 7. Do **not** add a bundler, build step, or runtime npm dependency.
 
