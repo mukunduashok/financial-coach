@@ -9,16 +9,16 @@ Actions, protecting the `main` branch from direct pushes and unverified merges.
 
 ```
 feature-branch  →  PR opened / commit pushed  →  [CI: Lint + Unit Tests]
-                →  PR marked ready to merge   →  [CI: E2E Tests]
-                →  All checks pass            →  Merge allowed into main
+                →  Added to merge queue       →  [CI: Lint + Unit Tests + E2E Tests]
+                →  Merge-group checks pass    →  Merge into main
 ```
 
 ## Scope
 
-### 1. Branch Protection Rules on `main`
+### 1. Merge Queue and Branch Protection on `main`
 
-Configure the following rules on the `main` branch via GitHub repository settings
-(**Settings → Branches → Add branch protection rule** for `main`):
+Configure the following rules for `main` via GitHub repository settings
+(**Settings → Rules → Rulesets**, or the repository's equivalent branch-protection settings):
 
 | Rule | Setting |
 |------|---------|
@@ -26,18 +26,16 @@ Configure the following rules on the `main` branch via GitHub repository setting
 | Require approvals | 1 (at minimum) |
 | Dismiss stale pull request approvals when new commits are pushed | ✅ Enabled |
 | Require status checks to pass before merging | ✅ Enabled |
-| Required status checks | `lint-and-unit-tests` (from Workflow 1) |
+| Required status checks | `lint-and-unit-tests`, `e2e-tests` |
 | Require branches to be up to date before merging | ✅ Enabled |
 | Do not allow bypassing the above settings | ✅ Enabled (applies to admins too) |
 | Restrict who can push to matching branches | Only via PR — no direct pushes |
+| Require merge queue | ✅ Enabled |
 
-> **Note on E2E gate:** The E2E workflow (Workflow 2) is a label-triggered on-demand check.
-> It is NOT listed as a required status check in branch protection because it is expensive
-> and only needs to pass once before the final merge. Developers trigger it manually by
-> applying the `run-e2e` label. The merge is blocked until the `e2e-tests` check passes
-> **after** the label is applied (enforce via `required status checks: e2e-tests` only when
-> the label is present — see Workflow 2 notes below). Alternatively, require it as an
-> optional advisory check that must be run before the PR author clicks Merge.
+> **Merge queue checks:** Adding an approved PR to the merge queue creates a `merge_group`
+> commit targeting `main`. Both required checks run on that commit: `lint-and-unit-tests`
+> and `e2e-tests`. The queue merges only after they pass. Use the E2E workflow's
+> `workflow_dispatch` trigger only for an explicit manual run outside the queue.
 
 ---
 
@@ -47,10 +45,14 @@ Configure the following rules on the `main` branch via GitHub repository setting
 
 **Purpose:** Fast feedback on every PR commit. Runs Biome linter and Vitest unit tests.
 
-**Trigger:** `pull_request` event targeting `main` on types:
+**Triggers:**
+- `pull_request` targeting `main` on types:
 - `opened` — when PR is first created
 - `synchronize` — when new commits are pushed to the PR branch
 - `reopened` — when a closed PR is reopened
+- `merge_group` targeting `main` on `checks_requested` — when GitHub creates a merge-queue
+   commit, so the required check reports on the exact candidate being merged.
+- `workflow_dispatch` — for a manually requested run.
 
 **Job: `lint-and-unit-tests`**
 
@@ -82,15 +84,12 @@ Steps:
 **File path:** `.github/workflows/ci-e2e.yml`
 
 **Purpose:** Full browser-based E2E test suite run before a PR merges into `main`.
-This is triggered on-demand when the developer signals the PR is ready to merge.
+This runs on the merge-queue candidate that GitHub proposes to merge into `main`.
 
-**Trigger:** `pull_request` event targeting `main` on type:
-- `labeled` — fires when any label is added to the PR.
-  - Gate the job with: `if: github.event.label.name == 'run-e2e'`
-
-**Alternative / complementary trigger:**
-- `pull_request` type `ready_for_review` (fires when a draft PR is converted to ready).
-  - Use this in addition to the label trigger so that converting from draft also kicks off E2E.
+**Triggers:**
+- `merge_group` targeting `main` on `checks_requested` — runs E2E when a PR enters or is
+   updated in the merge queue.
+- `workflow_dispatch` — permits an explicit manual E2E run from the Actions tab.
 
 **Job: `e2e-tests`**
 
@@ -125,17 +124,7 @@ DB; no external API calls are made during tests per `tests/e2e/js/fixtures.js`).
 
 ---
 
-### 4. Label Convention
-
-| Label name | Color | Purpose |
-|------------|-------|---------|
-| `run-e2e` | `#e4c2f7` (purple) | Triggers Workflow 2 on a PR |
-
-Create this label in GitHub (**Issues → Labels → New label**) before using the workflow.
-
----
-
-### 5. Files to Create
+### 4. Files to Create
 
 | File | Description |
 |------|-------------|
@@ -147,7 +136,7 @@ to `package.json`.
 
 ---
 
-### 6. Playwright Configuration Notes
+### 5. Playwright Configuration Notes
 
 The existing `playwright.config.js` must support GitHub Actions runners:
 
@@ -164,7 +153,7 @@ The existing `playwright.config.js` must support GitHub Actions runners:
 
 - `wait-on` npm dev dependency (for the E2E workflow server readiness check)
 - GitHub repository `main` branch must exist before branch protection rules are applied
-- The `run-e2e` label must be created in the GitHub repository
+- GitHub Merge Queue must be enabled for `main`
 
 ## Out of Scope
 
@@ -177,6 +166,9 @@ The existing `playwright.config.js` must support GitHub Actions runners:
 1. Direct pushes to `main` are blocked for all users including admins.
 2. Every PR commit triggers `lint-and-unit-tests` within 2 minutes of push.
 3. A PR with lint errors or failing unit tests cannot be merged.
-4. Applying the `run-e2e` label to a PR triggers the full Playwright suite.
-5. The Playwright HTML report is available as a downloadable artifact for 14 days.
-6. Both workflows complete successfully on a clean feature branch with no source changes.
+4. Adding an approved PR to the `main` merge queue triggers both `lint-and-unit-tests` and
+   `e2e-tests` on the merge-group commit.
+5. The merge queue does not merge until both required checks pass.
+6. `workflow_dispatch` can run either workflow manually; manual E2E runs retain the
+   Playwright HTML report for 14 days.
+7. Both workflows complete successfully for their respective PR and merge-queue events.

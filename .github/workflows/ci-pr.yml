@@ -9,6 +9,11 @@ on:
       - opened
       - synchronize
       - reopened
+  merge_group:
+    branches:
+      - main
+    types:
+      - checks_requested
 
 permissions:
   contents: read

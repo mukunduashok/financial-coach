@@ -192,13 +192,11 @@ make deploy         # Deploy to Cloudflare Pages
 ## Continuous Integration
 
 Pull requests to `main` run linting and Vitest unit tests when opened, synchronized, or reopened.
-End-to-end tests run only when the `run-e2e` label is added, or when a pull request already
-carrying that label is marked ready for review.
-
-Repository administrators must create the `run-e2e` label and configure branch protection for
-`main` manually. Require the `lint-and-unit-tests` status check if it is part of the merge policy.
-GitHub cannot make a label-conditional E2E status check required: a required check would remain
-pending when the label is absent.
+When an approved pull request is added to the `main` merge queue, GitHub creates a merge-group
+commit and runs both `lint-and-unit-tests` and `e2e-tests` against that candidate. Configure
+the `main` ruleset to require both checks and require the merge queue, so GitHub merges only after
+the queue checks pass. Repository maintainers can also start either workflow manually from the
+Actions tab with `workflow_dispatch`; manual E2E runs publish the Playwright report artifact.
 
 ## Deployment (Cloudflare Pages)
 
