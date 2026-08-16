@@ -2,22 +2,17 @@ name: PR E2E Tests
 
 on:
   workflow_dispatch:
-  pull_request:
+  merge_group:
     branches:
       - main
     types:
-      - labeled
-      - ready_for_review
+      - checks_requested
 
 permissions:
   contents: read
 
 jobs:
   e2e-tests:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'run-e2e') ||
-      (github.event.action == 'ready_for_review' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

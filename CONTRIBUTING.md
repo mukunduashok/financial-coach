@@ -98,8 +98,11 @@ Examples: `feat/cash-flow-forecast`, `fix/gmail-dedup-sip`.
 2. Keep PRs small and scoped to a single concern.
 3. Write a clear description: what changed, why, and how it was tested.
 4. Link any related issues.
-5. Do **not** commit secrets, API keys, or `.env` files.
-6. Do **not** add a bundler, build step, or runtime npm dependency.
+5. After approval, add the PR to the `main` merge queue. GitHub runs the required
+  `lint-and-unit-tests` and `e2e-tests` checks on the merge-group commit; use an Actions
+  `workflow_dispatch` run when an explicit manual E2E check is needed.
+6. Do **not** commit secrets, API keys, or `.env` files.
+7. Do **not** add a bundler, build step, or runtime npm dependency.
 
 ## Reporting Bugs & Requesting Features
 
