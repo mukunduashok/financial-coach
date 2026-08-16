@@ -192,11 +192,14 @@ make deploy         # Deploy to Cloudflare Pages
 ## Continuous Integration
 
 Pull requests to `main` run linting and Vitest unit tests when opened, synchronized, or reopened.
-When an approved pull request is added to the `main` merge queue, GitHub creates a merge-group
-commit and runs both `lint-and-unit-tests` and `e2e-tests` against that candidate. Configure
-the `main` ruleset to require both checks and require the merge queue, so GitHub merges only after
-the queue checks pass. Repository maintainers can also start either workflow manually from the
-Actions tab with `workflow_dispatch`; manual E2E runs publish the Playwright report artifact.
+E2E runs only after a submitted PR review is approved, or when a maintainer starts it manually
+from the Actions tab with `workflow_dispatch`; PR opening, reopening, synchronization, and review
+requests do not start E2E. Configure the `main` ruleset to require both `lint-and-unit-tests` and
+`e2e-tests`, dismiss stale approvals when commits change, and block merging until the fresh
+approval's required E2E check passes. A later approved review cancels any queued or in-progress
+E2E run for that PR. Manual runs use their own concurrency group, so they do not cancel a
+review-triggered run or another manual run. This repository does not use a merge queue; manual
+E2E runs publish the Playwright report artifact.
 
 ## Deployment (Cloudflare Pages)
 

@@ -2,17 +2,23 @@ name: PR E2E Tests
 
 on:
   workflow_dispatch:
-  merge_group:
-    branches:
-      - main
+  pull_request_review:
     types:
-      - checks_requested
+      - submitted
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   e2e-tests:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.review.state == 'approved' && github.event.pull_request.base.ref == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
