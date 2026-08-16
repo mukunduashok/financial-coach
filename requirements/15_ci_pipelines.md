@@ -8,9 +8,9 @@ Actions, protecting the `main` branch from direct pushes and unverified merges.
 ## Workflow Overview
 
 ```
-feature-branch  →  PR opened / commit pushed  →  [CI: Lint + Unit Tests]
-                →  Review submitted: approved →  [CI: E2E Tests]
-                →  Required checks pass       →  Merge into main
+feature-branch  →  Draft PR opened / commit pushed  →  [CI: Lint + Unit Tests]
+                →  Mark ready for review            →  [CI: E2E Tests]
+                →  Required checks pass             →  Merge into main
 ```
 
 ## Scope
@@ -23,19 +23,15 @@ Configure the following rules for `main` via GitHub repository settings
 | Rule | Setting |
 |------|---------|
 | Require a pull request before merging | ✅ Enabled |
-| Require approvals | 1 (at minimum) |
-| Dismiss stale pull request approvals when new commits are pushed | ✅ Enabled |
 | Require status checks to pass before merging | ✅ Enabled |
 | Required status checks | `lint-and-unit-tests`, `e2e-tests` |
 | Require branches to be up to date before merging | ✅ Enabled |
 | Do not allow bypassing the above settings | ✅ Enabled (applies to admins too) |
 | Restrict who can push to matching branches | Only via PR — no direct pushes |
 
-> **Review-gated E2E:** `e2e-tests` runs only when a review submitted for a PR targeting
-> `main` is approved, or when manually started with `workflow_dispatch`. It does not run on
-> PR creation, reopening, review requests, re-review requests, or new commits. Enable dismissal
-> of stale approvals so a new commit requires a newly submitted approval and E2E run. Require
-> the `e2e-tests` status check to block merging until that run passes.
+> **Ready-for-review E2E:** For a draft PR targeting `main`, `e2e-tests` runs when the PR is
+> marked ready for review. Start E2E manually with `workflow_dispatch` after later commits or
+> for a normal non-draft PR. Require the `e2e-tests` status check to block merging until it passes.
 
 ---
 
@@ -82,17 +78,18 @@ Steps:
 **File path:** `.github/workflows/ci-e2e.yml`
 
 **Purpose:** Full browser-based E2E test suite run before a PR merges into `main`.
-It is review-gated so routine PR events do not consume the E2E runner.
+It is ready-for-review-gated so routine PR events do not consume the E2E runner.
 
 **Triggers:**
-- `pull_request_review` targeting `main` on `submitted` — the `e2e-tests` job runs only if
-   the submitted review state is `approved`. Requesting or re-requesting a review alone does not
-   run E2E.
+- `pull_request` targeting `main` on `ready_for_review` — the `e2e-tests` job runs when a draft
+   PR is marked ready for review.
 - `workflow_dispatch` — permits an explicit manual E2E run from the Actions tab.
 
-**Concurrency:** Runs for the same PR share a workflow-level concurrency group. A newer approved
-review cancels queued or in-progress E2E runs for that PR. Manual dispatches use `github.run_id`
-as a fallback group, so they neither cancel review-triggered runs nor each other.
+After later commits, or for a normal non-draft PR, start E2E manually with `workflow_dispatch`.
+
+**Concurrency:** Runs for the same PR share a workflow-level concurrency group. A later
+ready-for-review event cancels queued or in-progress E2E runs for that PR. Manual dispatches use
+`github.run_id` as a fallback group, so they neither cancel PR-triggered runs nor each other.
 
 **Job: `e2e-tests`**
 
@@ -168,11 +165,11 @@ The existing `playwright.config.js` must support GitHub Actions runners:
 1. Direct pushes to `main` are blocked for all users including admins.
 2. Every PR commit triggers `lint-and-unit-tests` within 2 minutes of push.
 3. A PR with lint errors or failing unit tests cannot be merged.
-4. A submitted approved review triggers `e2e-tests`; PR opening, reopening, synchronization,
-   review requests, and re-review requests do not.
-5. New commits dismiss stale approvals, so a fresh approval triggers a fresh E2E run.
+4. Marking a draft PR ready for review triggers `e2e-tests`; PR opening, reopening, and
+   synchronization do not.
+5. `workflow_dispatch` starts E2E after later commits or for a normal non-draft PR.
 6. The required `e2e-tests` status check blocks merging until it passes.
-7. A later approved review cancels any queued or in-progress E2E run for the same PR.
+7. A later ready-for-review event cancels any queued or in-progress E2E run for the same PR.
 8. `workflow_dispatch` can run either workflow manually; manual E2E runs retain the
    Playwright HTML report for 14 days.
 9. Both workflows complete successfully for their respective events.

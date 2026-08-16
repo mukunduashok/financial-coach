@@ -98,13 +98,11 @@ Examples: `feat/cash-flow-forecast`, `fix/gmail-dedup-sip`.
 2. Keep PRs small and scoped to a single concern.
 3. Write a clear description: what changed, why, and how it was tested.
 4. Link any related issues.
-5. Lint and unit checks run on PR commits. E2E starts only when a reviewer submits an approval
-   for a PR targeting `main`, or when manually started with `workflow_dispatch`; opening,
-   reopening, synchronization, requesting a review, and re-requesting a review do not start it.
-   New commits dismiss stale approvals, so obtain a fresh approval for a fresh required
-   `e2e-tests` check before merging. The required E2E check blocks the merge. A newer approved
-   review cancels queued or in-progress E2E for that PR; manual E2E runs have separate groups and
-   do not cancel review-triggered or other manual runs. This repository does not use a merge queue.
+5. Lint and unit checks run on PR commits. For a draft PR targeting `main`, E2E starts when it is
+  marked ready for review. Start E2E manually with `workflow_dispatch` after later commits or
+  for a normal non-draft PR. The required `lint-and-unit-tests` and `e2e-tests` checks block the
+  merge. A later ready-for-review event cancels queued or in-progress E2E for that PR; manual E2E
+  runs have separate groups and do not cancel PR-triggered or other manual runs.
 6. Do **not** commit secrets, API keys, or `.env` files.
 7. Do **not** add a bundler, build step, or runtime npm dependency.
 
