@@ -16,7 +16,19 @@ export const test = base.extend({
 		// Use domcontentloaded — the app is JS-rendered so we don't need to
 		// wait for all assets. waitForSelector below confirms app readiness.
 		await page.goto("/", { waitUntil: "domcontentloaded" });
-		await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
+		try {
+			await page.waitForSelector(".bottom-nav", { timeout: 30_000 });
+		} catch (error) {
+			const sqlJsAssets = await Promise.all(
+				["/js/sql-wasm.js", "/js/sql-wasm.wasm"].map(async (path) => {
+					const response = await page.request.get(path);
+					return `${path}: ${response.status()}`;
+				}),
+			);
+			throw new Error(`App bootstrap failed; SQL.js asset responses: ${sqlJsAssets.join(", ")}`, {
+				cause: error,
+			});
+		}
 
 		await use(page);
 	},

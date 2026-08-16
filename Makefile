@@ -1,4 +1,7 @@
-.PHONY: help dev lint test test-unit test-e2e sync clean clean-ports deploy gen-env
+.PHONY: help dev lint test test-unit test-e2e sync clean clean-ports deploy gen-env prepare-sqljs
+
+SQLJS_DIST := node_modules/sql.js/dist
+SQLJS_BROWSER_ASSETS := sql-wasm.js sql-wasm.wasm
 
 # Source per-environment config from .env (KEY=value form), with a safe default.
 -include .env
@@ -11,6 +14,7 @@ help:
 	@echo "  make lint             - Lint + format JS with Biome"
 	@echo "  make test-unit        - Run JS unit tests (Vitest)"
 	@echo "  make test-e2e         - Run Playwright E2E tests"
+	@echo "  make prepare-sqljs    - Stage sql.js browser assets in static/js"
 	@echo "  make sync             - Install all dependencies"
 	@echo "  make deploy           - Deploy to Cloudflare Pages"
 	@echo ""
@@ -28,7 +32,14 @@ gen-env:
 	@printf 'window.__FINCOACH_CONFIG__ = {\n  GMAIL_PROXY_URL: "%s",\n};\n' "$(GMAIL_PROXY_URL)" > static/js/env.js
 	@echo "Generated static/js/env.js with GMAIL_PROXY_URL=$(GMAIL_PROXY_URL)"
 
-dev: gen-env
+prepare-sqljs:
+	@for asset in $(SQLJS_BROWSER_ASSETS); do \
+		test -f "$(SQLJS_DIST)/$$asset" || { echo "Missing SQL.js asset: $(SQLJS_DIST)/$$asset" >&2; exit 1; }; \
+		cp "$(SQLJS_DIST)/$$asset" "static/js/$$asset"; \
+	done
+	@echo "Prepared SQL.js browser assets in static/js"
+
+dev: gen-env prepare-sqljs
 	npx serve static -l 8111 --cors
 
 lint:
@@ -37,7 +48,7 @@ lint:
 test-unit:
 	npx vitest run
 
-deploy: gen-env
+deploy: gen-env prepare-sqljs
 	@DEPLOY_TS=$$(date -u +%Y%m%d%H%M%S) && \
 	sed -i "s/const CACHE_NAME = \"fincoach-v[^\"]*\"/const CACHE_NAME = \"fincoach-$$DEPLOY_TS\"/" static/js/sw.js && \
 	echo "Stamped CACHE_NAME: fincoach-$$DEPLOY_TS" && \
@@ -46,7 +57,7 @@ deploy: gen-env
 	npx wrangler pages deploy static --project-name=finance-coach-pro && \
 	git checkout static/js/sw.js static/_headers
 
-test-e2e:
+test-e2e: prepare-sqljs
 	@set -eu; \
 	if lsof -ti :8111 >/dev/null; then \
 		echo "Port 8111 is already in use; stop the existing server before running E2E tests." >&2; \

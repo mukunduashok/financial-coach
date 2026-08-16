@@ -32,10 +32,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium && make prepare-sqljs
       - name: Start static server
         run: npx serve static -l 8111 --cors &
-      - run: npx wait-on http://localhost:8111 --timeout 30000
+      - run: >-
+          npx wait-on http://localhost:8111 --timeout 30000 &&
+          curl --fail --silent --show-error --head http://localhost:8111/js/sql-wasm.js &&
+          curl --fail --silent --show-error --head http://localhost:8111/js/sql-wasm.wasm
       - run: npx playwright test --reporter=github,html
       - name: Stop static server
         if: always()
